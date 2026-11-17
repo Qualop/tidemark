@@ -30,7 +30,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
 |---|---|
 | macOS | 14 Sonoma or later (Apple silicon and Intel) |
 | Apps | The Codex / ChatGPT desktop app (`com.openai.codex`) and/or the Claude desktop app (`com.anthropic.claudefordesktop`) |
-| For Claude quotas | OpenCodex signed in to your Claude account (Tidemark reads its quota cache) |
+| Optional | Claude Code, OpenCodex or Gemini CLI signed in, for more providers (see below) |
 
 ## Install
 
@@ -48,11 +48,16 @@ Tidemark adds itself to Login Items on first launch. You can turn that off in **
 
 ## Where the numbers come from
 
+No extra service is required. Each provider is read straight from the tool you already use, best source first:
+
 | Quota | Source |
 |---|---|
-| GPT models | `https://chatgpt.com/backend-api/wham/usage`, the endpoint Codex itself uses. The access token is read from `~/.codex/auth.json` into memory and sent only to chatgpt.com. When OpenCodex is running, the hover card uses its cached quota for the active ChatGPT account. |
-| Claude and other providers | `~/.opencodex/provider-account-quota-cache.json`, which OpenCodex keeps up to date. Read only. |
+| GPT | `chatgpt.com/backend-api/wham/usage`, the endpoint Codex itself uses, with the Codex login in `~/.codex/auth.json`. OpenCodex's cache is only a fallback. |
+| Claude | 1. Claude Code's login, **only if you opt in** with `ClaudeKeychain` (exact 5h and 7d limits from `api.anthropic.com/api/oauth/usage`). 2. OpenCodex's quota cache, if installed. 3. The Claude app's own usage indicator (5h only, read while Claude is in front). |
+| Gemini | Gemini CLI's login in `~/.gemini/oauth_creds.json` (daily Pro and Flash limits). Shown only when Gemini CLI is signed in to an account with Code Assist quota. An expired token is refreshed in memory; nothing is written back. |
 | Selected model | The composer's model picker, read through the Accessibility API. |
+
+Tokens are read only when needed, kept in memory, and sent only to their own vendor. Each request runs at most once a minute (Gemini every five minutes).
 
 Tidemark never writes to Codex or OpenCodex files and sends nothing anywhere else. Its own files live in `~/Library/Application Support/Tidemark`.
 
@@ -66,7 +71,8 @@ Optional. Create `~/Library/Application Support/Tidemark/config.json` with any o
 | `HorizontalOffset` | `0` | Nudge left or right, in points |
 | `BottomOffset` | `32` | Vertical position when the footer row can't be found |
 | `TrackingIntervalMs` | `8` | Follow rate while the window moves or resizes |
-| `UsageRefreshIntervalMs` | `60000` | How often GPT usage is fetched |
+| `UsageRefreshIntervalMs` | `60000` | How often usage is fetched |
+| `ClaudeKeychain` | `false` | Read Claude Code's login from the Keychain for exact Claude limits. macOS asks for permission once (and again after an update, since the app is ad-hoc signed). |
 
 ```json
 { "VisualScale": 1.0, "HorizontalOffset": -4 }

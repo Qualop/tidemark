@@ -12,6 +12,20 @@ public struct UsageSnapshot: Sendable, Equatable {
     public static let unavailable = UsageSnapshot(fiveHourRemaining: nil, weeklyRemaining: nil)
 }
 
+extension UsageSnapshot {
+    /// The bars' 5h / 7d values from a list of windows.
+    public init(windows: [QuotaWindow]) {
+        self.init(fiveHourRemaining: windows.first { $0.label == "5h" }?.remaining,
+                  weeklyRemaining: windows.first { $0.label == "7d" }?.remaining)
+    }
+}
+
+/// ChatGPT usage: the bar values plus every window for the hover card.
+public struct OpenAIUsage: Sendable {
+    public let snapshot: UsageSnapshot
+    public let windows: [QuotaWindow]
+}
+
 private struct AuthMaterial {
     let accessToken: String
     let accountID: String?
@@ -42,7 +56,7 @@ public actor UsageFetcher {
         session = URLSession(configuration: configuration)
     }
 
-    public func refresh() async -> UsageSnapshot? {
+    public func refresh() async -> OpenAIUsage? {
         var finalFailure = FetchFailure(kind: "unknown", httpStatus: nil, retryable: false)
         var attempted = 0
 
@@ -72,7 +86,7 @@ public actor UsageFetcher {
         return nil
     }
 
-    private func requestOnce() async throws -> UsageSnapshot {
+    private func requestOnce() async throws -> OpenAIUsage {
         let auth = try loadAuthMaterial()
         var request = URLRequest(url: endpoint)
         request.httpMethod = "GET"
@@ -113,7 +127,8 @@ public actor UsageFetcher {
         }
 
         // Intentionally ignore `additional_rate_limits`: only the top-level default rate_limit is authoritative.
-        return UsageWindowParser.parse(rateLimit: rateLimit)
+        return OpenAIUsage(snapshot: UsageWindowParser.parse(rateLimit: rateLimit),
+                           windows: UsageWindowParser.windows(rateLimit: rateLimit, now: Date()))
     }
 
     private func loadAuthMaterial() throws -> AuthMaterial {

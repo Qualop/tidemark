@@ -10,6 +10,8 @@ struct LocatedComposer {
     let footerLeftElement: AXUIElement?
     let footerLeftFrame: CGRect?
     let modelLabel: String?
+    /// Claude app's "Usage: 77% ..." control, when present.
+    let usageElement: AXUIElement?
     let window: AXUIElement
     let windowFrame: CGRect
 }
@@ -125,6 +127,9 @@ final class AccessibilityLocator {
             anchor: anchor?.element,
             candidates: footers
         )
+        let usageElement = footers.first { candidate in
+            ClaudeAppUsageParser.fiveHourRemaining(from: ownText(candidate.element)) != nil
+        }?.element
         return LocatedComposer(
             element: container.element,
             frame: container.frame,
@@ -133,6 +138,7 @@ final class AccessibilityLocator {
             footerLeftElement: footerLeft?.element,
             footerLeftFrame: footerLeft?.frame,
             modelLabel: modelLabel,
+            usageElement: usageElement,
             window: window,
             windowFrame: windowFrame
         )

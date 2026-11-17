@@ -8,6 +8,7 @@ public enum OverlayPaths {
     public static let status = supportDirectory.appendingPathComponent("status.json")
     public static let model = supportDirectory.appendingPathComponent("model.json")
     public static let layout = supportDirectory.appendingPathComponent("layout.json")
+    public static let sources = supportDirectory.appendingPathComponent("sources.json")
     public static let overlayLock = supportDirectory.appendingPathComponent("tidemark.lock")
     public static let codexBundleIdentifier = "com.openai.codex"
     public static let claudeBundleIdentifier = "com.anthropic.claudefordesktop"
@@ -29,6 +30,9 @@ public struct OverlayConfig: Codable, Sendable {
     public var usageRefreshIntervalMs: Int = 60_000
     public var usageMaxAttempts: Int = 3
     public var usageRetryDelayMs: Int = 5_000
+    /// Read Claude Code's login from the Keychain for exact 5h/7d Claude limits.
+    /// Off by default because macOS asks for permission the first time.
+    public var claudeKeychain = false
 
     enum CodingKeys: String, CodingKey {
         case width = "Width"
@@ -42,6 +46,7 @@ public struct OverlayConfig: Codable, Sendable {
         case usageRefreshIntervalMs = "UsageRefreshIntervalMs"
         case usageMaxAttempts = "UsageMaxAttempts"
         case usageRetryDelayMs = "UsageRetryDelayMs"
+        case claudeKeychain = "ClaudeKeychain"
     }
 
     public init() {}
@@ -59,6 +64,7 @@ public struct OverlayConfig: Codable, Sendable {
         usageRefreshIntervalMs = try values.decodeIfPresent(Int.self, forKey: .usageRefreshIntervalMs) ?? usageRefreshIntervalMs
         usageMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .usageMaxAttempts) ?? usageMaxAttempts
         usageRetryDelayMs = try values.decodeIfPresent(Int.self, forKey: .usageRetryDelayMs) ?? usageRetryDelayMs
+        claudeKeychain = try values.decodeIfPresent(Bool.self, forKey: .claudeKeychain) ?? claudeKeychain
     }
 
     public static func load() -> OverlayConfig {
@@ -120,6 +126,16 @@ public enum SanitizedStatus {
     }
 
     nonisolated(unsafe) private static var lastLayout: Data?
+
+    /// Where each provider's numbers came from ("direct", "opencodex" or "none"). No values, no tokens.
+    public static func writeSources(_ sources: [String: String]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: sources, options: [.prettyPrinted, .sortedKeys]),
+              data != lastSources else { return }
+        lastSources = data
+        try? data.write(to: OverlayPaths.sources, options: .atomic)
+    }
+
+    nonisolated(unsafe) private static var lastSources: Data?
 
     /// Records which model label the overlay read and which quota source it chose.
     public static func writeModel(label: String, source: QuotaSource) {

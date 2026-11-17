@@ -19,7 +19,8 @@ final class UsageWindowParserTests {
         checks.testModelLabelSelectsQuotaSource()
         checks.testOpenCodexCacheUsesProviderRowAsUsedPercent()
         checks.testCodexAccountRowWithSecondResets()
-        print("PASS: 10 quota regression checks")
+        checks.testDirectSourceParsers()
+        print("PASS: 11 quota regression checks")
     }
     private func window(_ seconds: Int, _ used: Double) -> [String: Any] {
         ["limit_window_seconds": seconds, "used_percent": used]
@@ -112,5 +113,33 @@ final class UsageWindowParserTests {
         let windows = QuotaRow.windows(["monthlyPercent": 1, "monthlyResetAt": 1_797_494_415, "updatedAt": 1], now: now)
         precondition(windows == [QuotaWindow(label: "30d", remaining: 99,
                                              resetAt: Date(timeIntervalSince1970: 1_797_494_415))], "\(windows)")
+    }
+
+    func testDirectSourceParsers() {
+        let now = Date(timeIntervalSince1970: 1_794_905_600)
+        // Claude: utilization is the used share (0-100).
+        let claude = ClaudeUsageParser.windows([
+            "five_hour": ["utilization": 23.0, "resets_at": "2026-11-17T13:00:00.123+00:00"],
+            "seven_day": ["utilization": 56, "resets_at": "2026-11-19T01:00:00Z"],
+            "seven_day_opus": ["utilization": 10],
+        ], now: now)
+        precondition(claude.map(\.label) == ["5h", "7d"] && claude.map(\.remaining) == [77, 44], "\(claude)")
+        precondition(claude[0].resetAt != nil, "fractional-second ISO date")
+        // Gemini: tightest bucket per family; remainingFraction is 0-1.
+        let gemini = GeminiQuotaParser.windows(["buckets": [
+            ["modelId": "gemini-2.5-pro", "remainingFraction": 0.8, "resetTime": "2026-11-18T00:00:00Z"],
+            ["modelId": "gemini-3-pro-preview", "remainingFraction": 0.35],
+            ["modelId": "gemini-2.5-flash", "remainingFraction": 1],
+        ]], now: now)
+        precondition(gemini.map(\.label) == ["Pro", "Flash"] && gemini.map(\.remaining) == [35, 100], "\(gemini)")
+        // ChatGPT monthly plan: no 5h/7d bars, but a 30d window for the card.
+        let wham = UsageWindowParser.windows(rateLimit: [
+            "primary_window": ["limit_window_seconds": 2_592_000, "used_percent": 3, "reset_at": 1_797_494_415],
+        ], now: now)
+        precondition(wham == [QuotaWindow(label: "30d", remaining: 97, resetAt: Date(timeIntervalSince1970: 1_797_494_415))], "\(wham)")
+        // Claude app's own control reports the used share.
+        precondition(ClaudeAppUsageParser.fiveHourRemaining(from: "사용량: 5시간 한도의 77% 오후 10:00에 초기화") == 23)
+        precondition(ClaudeAppUsageParser.fiveHourRemaining(from: "Usage: 40% of 5-hour limit") == 60)
+        precondition(ClaudeAppUsageParser.fiveHourRemaining(from: "모델: Opus 5.5 높음") == nil)
     }
 }

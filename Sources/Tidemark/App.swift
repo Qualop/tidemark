@@ -59,6 +59,16 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var usageRefreshInFlight = false
     private var quotaSource: QuotaSource = .openAI
     private var openAISnapshot: UsageSnapshot = .unavailable
+    private var openAIWindows: [QuotaWindow] = []
+    private var claudeDirect: (windows: [QuotaWindow], at: Date)?
+    private var claudeAppUsage: (remaining: Int, at: Date)?
+    private var usageElement: AXUIElement?
+    private var lastUsageReadAt = Date.distantPast
+    private var geminiWindows: [QuotaWindow] = []
+    private let claudeFetcher = ClaudeQuotaFetcher()
+    private var claudeRefreshInFlight = false
+    private var sourceStatus: [String: String] = [:]
+    private let geminiFetcher = GeminiQuotaFetcher()
     private var lastModelLabel: String?
     private var lastModelReadAt = Date.distantPast
     private var lastAnchorOwnText: String?
@@ -154,13 +164,25 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     /// Claude's control row is thin, so it gets the one-line layout.
     private func applyLayoutMode() {
         let compact = targetIsClaude
-        let logical = UsageOverlayView.logicalSize(config: config, compact: compact)
-        let size = NSSize(width: logical.width * config.visualScale, height: logical.height * config.visualScale)
         overlayView.update(compact: compact)
-        if panel.frame.size != size {
-            panel.setContentSize(size)
-            overlayView.frame = NSRect(origin: .zero, size: size)
-        }
+        resizePanel()
+    }
+
+    private func resizePanel() {
+        let logical = UsageOverlayView.logicalSize(config: config, compact: overlayView.compact, bar: overlayView.compactBar)
+        let size = NSSize(width: logical.width * config.visualScale, height: logical.height * config.visualScale)
+        guard panel.frame.size != size else { return }
+        panel.setContentSize(size)
+        overlayView.frame = NSRect(origin: .zero, size: size)
+    }
+
+    /// One-line layout: use the longest bars that fit between the row's controls.
+    private func fitCompactBars(left: CGRect, anchor: CGRect) {
+        let room = (anchor.minX - left.maxX - 32) / config.visualScale
+        let bar = UsageOverlayView.compactBar(fitting: room)
+        guard abs(bar - overlayView.compactBar) >= 2 else { return }
+        overlayView.update(compactBar: bar)
+        resizePanel()
     }
 
     /// Target quit (or another target came to the front): drop the AX observer, timers and
@@ -196,6 +218,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         lastWindowFrame = nil
         lastAnchorOwnText = nil
         lastModelLabel = nil
+        usageElement = nil
         needsRescan = true
         nextRescanAt = .distantPast
         rescanFailures = 0
@@ -460,6 +483,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 lastFoundAt = Date()
                 needsRescan = false
                 updateModelLabel(located.modelLabel)
+                usageElement = located.usageElement
+                readClaudeAppUsage()
                 SanitizedStatus.writeLayout([
                     "app": target.bundleIdentifier ?? "",
                     "composer": Self.describe(located.frame),
@@ -489,6 +514,10 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         if Date().timeIntervalSince(lastThemeCheckAt) >= 2 {
             lastThemeCheckAt = Date()
             updateTheme()
+        }
+
+        if targetIsClaude, Date().timeIntervalSince(lastUsageReadAt) >= 5 {
+            readClaudeAppUsage()
         }
 
         // Cheap re-read of the already located model popup; the full tree rescan is much slower.
@@ -576,6 +605,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         footerLeftAXFrame: CGRect? = nil
     ) {
         let composer = appKitRect(fromAccessibilityRect: composerAXFrame)
+        if overlayView.compact, let footerAnchorAXFrame, let footerLeftAXFrame {
+            fitCompactBars(left: footerLeftAXFrame, anchor: footerAnchorAXFrame)
+        }
         let size = panel.frame.size
         let verticalCenter: CGFloat
         if let footerAnchorAXFrame {
@@ -666,8 +698,45 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         switch effectiveSource {
         case .openAI:
             overlayView.update(snapshot: openAISnapshot)
+        case .openCodexProvider("anthropic"):
+            overlayView.update(snapshot: UsageSnapshot(windows: claudeWindows(now: Date())))
         case .openCodexProvider(let provider):
             overlayView.update(snapshot: OpenCodexQuotaReader.snapshot(provider: provider) ?? .unavailable)
+        }
+    }
+
+    /// Claude limits, best source first: Claude Code's login (opt-in Keychain, fresh within
+    /// 10 minutes), OpenCodex's cache, then the Claude app's own usage control (5h only).
+    private func claudeWindows(now: Date) -> [QuotaWindow] {
+        if let claudeDirect, now.timeIntervalSince(claudeDirect.at) < 600, !claudeDirect.windows.isEmpty {
+            return claudeDirect.windows
+        }
+        let cached = OpenCodexQuotaReader.windows(provider: "anthropic", now: now)
+        if !cached.isEmpty { return cached }
+        if let claudeAppUsage, now.timeIntervalSince(claudeAppUsage.at) < 1_800 {
+            return [QuotaWindow(label: "5h", remaining: claudeAppUsage.remaining, resetAt: nil)]
+        }
+        return []
+    }
+
+    private func claudeSourceName(now: Date) -> String {
+        if let claudeDirect, now.timeIntervalSince(claudeDirect.at) < 600, !claudeDirect.windows.isEmpty { return "direct" }
+        if !OpenCodexQuotaReader.windows(provider: "anthropic", now: now).isEmpty { return "opencodex" }
+        if let claudeAppUsage, now.timeIntervalSince(claudeAppUsage.at) < 1_800 { return "claude-app" }
+        return "none"
+    }
+
+    /// Cheap read of the Claude app's usage control (one batched AX request).
+    private func readClaudeAppUsage() {
+        lastUsageReadAt = Date()
+        guard targetIsClaude, let locator, let usageElement,
+              let remaining = ClaudeAppUsageParser.fiveHourRemaining(from: locator.ownText(usageElement)) else { return }
+        let changed = claudeAppUsage?.remaining != remaining
+        claudeAppUsage = (remaining, Date())
+        if changed {
+            sourceStatus["claude"] = claudeSourceName(now: Date())
+            SanitizedStatus.writeSources(sourceStatus)
+            applyCurrentSnapshot()
         }
     }
 
@@ -689,12 +758,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         let otherColor = dark
             ? NSColor(calibratedRed: 160 / 255, green: 140 / 255, blue: 1, alpha: 1)
             : NSColor(calibratedRed: 99 / 255, green: 82 / 255, blue: 220 / 255, alpha: 1)
-        var gpt = CodexAccountQuotaReader.activeWindows(now: now)
-        if gpt.isEmpty {
-            // OpenCodex not running: fall back to the direct ChatGPT usage response.
-            if let five = openAISnapshot.fiveHourRemaining { gpt.append(QuotaWindow(label: "5h", remaining: five, resetAt: nil)) }
-            if let week = openAISnapshot.weeklyRemaining { gpt.append(QuotaWindow(label: "7d", remaining: week, resetAt: nil)) }
-        }
+        // Direct ChatGPT response first; OpenCodex's per-account cache only as a fallback.
+        let gpt = openAIWindows.isEmpty ? CodexAccountQuotaReader.activeWindows(now: now) : openAIWindows
         let source = effectiveSource
         var sections = [
             HoverSection(
@@ -704,13 +769,23 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 windows: gpt
             ),
         ]
-        // Claude appears whenever OpenCodex has an Anthropic account (or it is selected).
-        let claude = OpenCodexQuotaReader.windows(provider: "anthropic", now: now)
+        // Claude appears whenever Claude Code or OpenCodex has a Claude login (or it is selected).
+        let claude = claudeWindows(now: now)
         let claudeActive = source == .openCodexProvider("anthropic")
         if !claude.isEmpty || claudeActive {
             sections.insert(HoverSection(title: "Claude", color: claudeColor, active: claudeActive, windows: claude), at: 0)
         }
-        if case .openCodexProvider(let provider) = source, provider != "anthropic" {
+        // Gemini appears when Gemini CLI is signed in.
+        var geminiActive = false
+        if case .openCodexProvider(let provider) = source, ["google", "gemini"].contains(provider) { geminiActive = true }
+        if !geminiWindows.isEmpty {
+            let geminiColor = dark
+                ? NSColor(calibratedRed: 138 / 255, green: 180 / 255, blue: 248 / 255, alpha: 1)
+                : NSColor(calibratedRed: 26 / 255, green: 115 / 255, blue: 232 / 255, alpha: 1)
+            sections.append(HoverSection(title: "Gemini", color: geminiColor, active: geminiActive, windows: geminiWindows))
+        }
+        if case .openCodexProvider(let provider) = source, provider != "anthropic",
+           !(geminiActive && !geminiWindows.isEmpty) {
             sections.append(HoverSection(
                 title: provider.capitalized,
                 color: otherColor,
@@ -721,14 +796,46 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         return sections
     }
 
+    /// Claude and Gemini each update the bars as soon as their own answer arrives.
+    private func refreshDirectQuota() {
+        if !claudeRefreshInFlight {
+            claudeRefreshInFlight = true
+            Task { [weak self] in
+                guard let self else { return }
+                let windows = await self.claudeFetcher.claudeWindows(useKeychain: self.config.claudeKeychain)
+                await MainActor.run {
+                    self.claudeRefreshInFlight = false
+                    if let windows { self.claudeDirect = (windows, Date()) }
+                    self.sourceStatus["claude"] = self.claudeSourceName(now: Date())
+                    SanitizedStatus.writeSources(self.sourceStatus)
+                    self.applyCurrentSnapshot()
+                }
+            }
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            let windows = await self.geminiFetcher.geminiWindows()
+            await MainActor.run {
+                self.geminiWindows = windows
+                self.sourceStatus["gemini"] = windows.isEmpty ? "none" : "direct"
+                SanitizedStatus.writeSources(self.sourceStatus)
+            }
+        }
+    }
+
     private func refreshUsage() {
+        refreshDirectQuota()
         guard !usageRefreshInFlight else { return }
         usageRefreshInFlight = true
         Task { [weak self] in
             guard let self else { return }
             let result = await self.usageFetcher.refresh()
             await MainActor.run {
-                self.openAISnapshot = result ?? .unavailable
+                self.openAISnapshot = result?.snapshot ?? .unavailable
+                self.openAIWindows = result?.windows ?? []
+                self.sourceStatus["gpt"] = result != nil ? "direct"
+                    : (CodexAccountQuotaReader.activeWindows(now: Date()).isEmpty ? "none" : "opencodex")
+                SanitizedStatus.writeSources(self.sourceStatus)
                 self.applyCurrentSnapshot()
                 self.usageRefreshInFlight = false
                 _ = malloc_zone_pressure_relief(nil, 0)

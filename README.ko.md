@@ -30,7 +30,7 @@ OpenCodex로 Claude 같은 다른 제공자를 Codex에 연결해 쓴다면, Tid
 |---|---|
 | macOS | macOS 14 Sonoma 이상 (Apple 실리콘, Intel 모두) |
 | 앱 | Codex / ChatGPT 데스크톱 앱(`com.openai.codex`), Claude 데스크톱 앱(`com.anthropic.claudefordesktop`) 중 하나 이상 |
-| Claude 한도 표시 | Claude 계정으로 로그인된 OpenCodex (Tidemark가 그 사용량 캐시를 읽습니다) |
+| 선택 | 더 많은 제공자를 보려면 Claude Code, OpenCodex, Gemini CLI 중 로그인된 것 (아래 참고) |
 
 ## 설치
 
@@ -48,11 +48,16 @@ OpenCodex로 Claude 같은 다른 제공자를 Codex에 연결해 쓴다면, Tid
 
 ## 숫자는 어디서 오나요
 
+별도 서비스는 필요 없습니다. 이미 쓰고 있는 도구에서 각 제공자의 값을 직접 읽고, 좋은 출처부터 씁니다.
+
 | 한도 | 출처 |
 |---|---|
-| GPT 모델 | Codex가 직접 쓰는 `https://chatgpt.com/backend-api/wham/usage`. 접근 토큰은 `~/.codex/auth.json`에서 메모리로만 읽고 chatgpt.com에만 보냅니다. OpenCodex가 실행 중이면 호버 카드에는 활성 ChatGPT 계정에 대해 OpenCodex가 캐시한 값을 씁니다. |
-| Claude 등 다른 제공자 | OpenCodex가 갱신하는 `~/.opencodex/provider-account-quota-cache.json`. 읽기만 합니다. |
+| GPT | Codex 로그인(`~/.codex/auth.json`)으로 Codex가 직접 쓰는 `chatgpt.com/backend-api/wham/usage`를 조회합니다. OpenCodex 캐시는 대체 수단으로만 씁니다. |
+| Claude | 1. `ClaudeKeychain`을 **직접 켠 경우에만** Claude Code 로그인으로 정확한 5h·7d 한도를 조회합니다(`api.anthropic.com/api/oauth/usage`). 2. OpenCodex가 있으면 그 사용량 캐시. 3. Claude 앱이 앞에 있을 때 앱 자체의 사용량 표시(5h만). |
+| Gemini | Gemini CLI 로그인(`~/.gemini/oauth_creds.json`)으로 Pro·Flash 일일 한도를 조회합니다. Code Assist 한도가 있는 계정으로 로그인돼 있을 때만 표시합니다. 만료된 토큰은 메모리에서만 갱신하고 파일에 다시 쓰지 않습니다. |
 | 선택된 모델 | 손쉬운 사용 API로 읽은 입력창의 모델 선택기 |
+
+토큰은 필요할 때만 읽어 메모리에만 두고, 해당 회사 서버에만 보냅니다. 조회는 최대 1분에 한 번(Gemini는 5분에 한 번)입니다.
 
 Tidemark는 Codex나 OpenCodex 파일에 아무것도 쓰지 않고, 다른 곳으로 아무것도 보내지 않습니다. Tidemark 자체 파일은 `~/Library/Application Support/Tidemark`에 있습니다.
 
@@ -66,7 +71,8 @@ Tidemark는 Codex나 OpenCodex 파일에 아무것도 쓰지 않고, 다른 곳�
 | `HorizontalOffset` | `0` | 좌우 위치 미세 조정(포인트) |
 | `BottomOffset` | `32` | 입력창 아래쪽 버튼 줄을 못 찾았을 때의 세로 위치 |
 | `TrackingIntervalMs` | `8` | 창을 움직이거나 크기를 바꿀 때 따라가는 주기 |
-| `UsageRefreshIntervalMs` | `60000` | GPT 사용량을 가져오는 주기 |
+| `UsageRefreshIntervalMs` | `60000` | 사용량을 가져오는 주기 |
+| `ClaudeKeychain` | `false` | 키체인의 Claude Code 로그인으로 정확한 Claude 한도를 가져옵니다. 처음 한 번 macOS가 허용 여부를 묻습니다(별도 인증서 없이 서명한 앱이라 업데이트 후에도 다시 물을 수 있습니다). |
 
 ```json
 { "VisualScale": 1.0, "HorizontalOffset": -4 }
