@@ -88,6 +88,12 @@ final class UsageWindowParserTests {
         precondition(QuotaSource.looksLikeModelLabel("anthropic/claude-opus-5-5 High"))
         precondition(QuotaSource.looksLikeModelLabel("GPT-5.5 High"))
         precondition(!QuotaSource.looksLikeModelLabel("Full access"))
+        // Claude app picker (OpenCodex adds GPT models there).
+        precondition(QuotaSource.forClaudeApp(modelLabel: "모델: Opus 5.5 높음 Opus 5.5 높음") == .openCodexProvider("anthropic"))
+        precondition(QuotaSource.forClaudeApp(modelLabel: "Sonnet 5.5") == .openCodexProvider("anthropic"))
+        precondition(QuotaSource.forClaudeApp(modelLabel: "모델: GPT 6.1 Sol (native) GPT 6.1 Sol (native)") == .openAI)
+        precondition(QuotaSource.forClaudeApp(modelLabel: "GPT 6 Astra (native)") == .openAI)
+        precondition(QuotaSource.forClaudeApp(modelLabel: nil) == .openCodexProvider("anthropic"))
     }
 
     func testOpenCodexCacheUsesProviderRowAsUsedPercent() {

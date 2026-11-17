@@ -31,6 +31,18 @@ public enum QuotaSource: Equatable, Sendable {
         return .openAI
     }
 
+    /// The Claude app's picker lists Claude models, plus GPT models that OpenCodex adds
+    /// (e.g. "GPT 6.1 Sol (native)"). Anything not clearly another provider is Claude.
+    public static func forClaudeApp(modelLabel: String?) -> QuotaSource {
+        guard let raw = modelLabel?.lowercased(), !raw.isEmpty else { return .openCodexProvider("anthropic") }
+        if ["gpt", "codex", "openai"].contains(where: { raw.contains($0) }) { return .openAI }
+        if raw.split(whereSeparator: { $0.isWhitespace }).contains(where: { $0.contains("/") }) {
+            return from(modelLabel: raw)
+        }
+        if raw.contains("gemini") { return .openCodexProvider("google") }
+        return .openCodexProvider("anthropic")
+    }
+
     /// True when a control's text plausibly names a model (used to pick the selector).
     public static func looksLikeModelLabel(_ text: String) -> Bool {
         let lowered = text.lowercased()

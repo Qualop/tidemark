@@ -58,6 +58,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var permissionPrompted = false
     private var usageRefreshInFlight = false
     private var quotaSource: QuotaSource = .openAI
+    /// The Claude app keeps its own choice (Claude models, or GPT models added by OpenCodex).
+    private var claudeQuotaSource: QuotaSource = .openCodexProvider("anthropic")
     private var openAISnapshot: UsageSnapshot = .unavailable
     private var openAIWindows: [QuotaWindow] = []
     private var claudeDirect: (windows: [QuotaWindow], at: Date)?
@@ -146,7 +148,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     /// In the Claude app the bars always show Claude limits; in Codex they follow the picker.
-    private var effectiveSource: QuotaSource { targetIsClaude ? .openCodexProvider("anthropic") : quotaSource }
+    private var effectiveSource: QuotaSource { targetIsClaude ? claudeQuotaSource : quotaSource }
 
     private static func isTarget(_ app: NSRunningApplication?) -> Bool {
         guard let id = app?.bundleIdentifier else { return false }
@@ -682,15 +684,18 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     private func updateModelLabel(_ label: String?) {
-        // The Claude app's picker never changes which quota is shown.
-        guard !targetIsClaude else { return }
         // Keep the previous choice when the selector text is momentarily unreadable.
         guard let label, !label.isEmpty, label != lastModelLabel else { return }
         lastModelLabel = label
-        let source = QuotaSource.from(modelLabel: label)
+        let source = targetIsClaude ? QuotaSource.forClaudeApp(modelLabel: label) : QuotaSource.from(modelLabel: label)
         SanitizedStatus.writeModel(label: label, source: source)
-        guard source != quotaSource else { return }
-        quotaSource = source
+        if targetIsClaude {
+            guard source != claudeQuotaSource else { return }
+            claudeQuotaSource = source
+        } else {
+            guard source != quotaSource else { return }
+            quotaSource = source
+        }
         applyCurrentSnapshot()
     }
 
