@@ -5,11 +5,17 @@ final class UsageOverlayView: NSView {
     private let config: OverlayConfig
     private(set) var snapshot: UsageSnapshot = .unavailable
     private(set) var darkMode = false
-    /// One-line layout for thin control rows (the Claude app's row is 24 pt tall).
-    private(set) var compact = false
+    /// Responsive layouts, widest first. The overlay picks the widest that fits the free
+    /// space between the row's controls, so it never covers them.
+    enum Layout: Equatable {
+        case twoLine            // Codex: label and value above each bar
+        case bars(CGFloat)      // one line: "5h ━━ 20% | 7d ━━ 41%" with this bar length
+        case text               // one line without bars: "5h 20% | 7d 41%"
+        case single             // only the tighter of the two: "5h 20%"
+    }
 
-    /// Bar length in the one-line layout; shortened when the row has little room.
-    private(set) var compactBar: CGFloat = UsageOverlayView.compactBarMax
+    private(set) var layout: Layout = .twoLine
+    var compact: Bool { layout != .twoLine }
     static let compactBarMax: CGFloat = 90  // same length as the two-line bars
     static let compactBarMin: CGFloat = 36
     /// One item = label, 4 pt, bar, 9 pt, value. Items are kept tight inside and
@@ -21,16 +27,26 @@ final class UsageOverlayView: NSView {
     private static let compactItemSpacing: CGFloat = 28
     private static var compactItemFixed: CGFloat { compactLabel + compactLabelGap + compactValueGap + compactValue }
 
+    private static var textItem: CGFloat { compactLabel + compactLabelGap + compactValue }
+
     /// Logical (unscaled) size of each layout.
-    static func logicalSize(config: OverlayConfig, compact: Bool, bar: CGFloat = compactBarMax) -> NSSize {
-        guard compact else { return NSSize(width: config.width, height: config.height) }
-        return NSSize(width: (compactItemFixed + bar) * 2 + compactItemSpacing, height: 18)
+    static func logicalSize(config: OverlayConfig, layout: Layout) -> NSSize {
+        switch layout {
+        case .twoLine: return NSSize(width: config.width, height: config.height)
+        case .bars(let bar): return NSSize(width: (compactItemFixed + bar) * 2 + compactItemSpacing, height: 18)
+        case .text: return NSSize(width: textItem * 2 + compactItemSpacing, height: 18)
+        case .single: return NSSize(width: textItem, height: 18)
+        }
     }
 
-    /// Longest bar that fits a row of the given logical width.
-    static func compactBar(fitting width: CGFloat) -> CGFloat {
-        let fixed = compactItemFixed * 2 + compactItemSpacing
-        return min(max(((width - fixed) / 2).rounded(.down), compactBarMin), compactBarMax)
+    /// Widest layout that fits the given logical width, or nil when nothing fits.
+    static func layout(fitting width: CGFloat, preferTwoLine: Bool, config: OverlayConfig) -> Layout? {
+        if preferTwoLine, width >= config.width { return .twoLine }
+        let bar = ((width - compactItemFixed * 2 - compactItemSpacing) / 2).rounded(.down)
+        if bar >= compactBarMin { return .bars(min(bar, compactBarMax)) }
+        if width >= textItem * 2 + compactItemSpacing { return .text }
+        if width >= textItem { return .single }
+        return nil
     }
 
     override var isOpaque: Bool { false }
@@ -58,34 +74,39 @@ final class UsageOverlayView: NSView {
         needsDisplay = true
     }
 
-    func update(compact: Bool) {
-        guard self.compact != compact else { return }
-        self.compact = compact
-        needsDisplay = true
-    }
-
-    func update(compactBar: CGFloat) {
-        guard self.compactBar != compactBar else { return }
-        self.compactBar = compactBar
+    func update(layout: Layout) {
+        guard self.layout != layout else { return }
+        self.layout = layout
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.setFill()
         dirtyRect.fill()
-        if compact {
-            drawCompactItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
-            let item = Self.compactItemFixed + compactBar
-            drawCompactItem(logicalX: item + Self.compactItemSpacing, title: "7d", remaining: snapshot.weeklyRemaining)
+        switch layout {
+        case .twoLine:
+            drawItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
+            drawItem(logicalX: 120, title: "7d", remaining: snapshot.weeklyRemaining)
+        case .bars, .text:
+            let bar: CGFloat
+            if case .bars(let length) = layout { bar = length } else { bar = 0 }
+            let item = bar > 0 ? Self.compactItemFixed + bar : Self.textItem
+            drawCompactItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining, bar: bar)
+            drawCompactItem(logicalX: item + Self.compactItemSpacing, title: "7d", remaining: snapshot.weeklyRemaining, bar: bar)
             drawCompactDivider(logicalX: item + Self.compactItemSpacing / 2)
-            return
+        case .single:
+            // The tighter window is the one worth seeing.
+            let five = snapshot.fiveHourRemaining, week = snapshot.weeklyRemaining
+            if let week, five == nil || week < five! {
+                drawCompactItem(logicalX: 0, title: "7d", remaining: week, bar: 0)
+            } else {
+                drawCompactItem(logicalX: 0, title: "5h", remaining: five, bar: 0)
+            }
         }
-        drawItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
-        drawItem(logicalX: 120, title: "7d", remaining: snapshot.weeklyRemaining)
     }
 
     /// "5h ━━━━ 77%" on one line, vertically centred in the view.
-    private func drawCompactItem(logicalX: CGFloat, title: String, remaining: Int?) {
+    private func drawCompactItem(logicalX: CGFloat, title: String, remaining: Int?, bar: CGFloat) {
         let scale = CGFloat(config.visualScale)
         let midY = bounds.height / 2
         let titleColor = darkMode
@@ -109,19 +130,21 @@ final class UsageOverlayView: NSView {
         titleString.draw(at: NSPoint(x: x, y: midY - titleSize.height / 2))
         x += min(titleSize.width, Self.compactLabel * scale) + Self.compactLabelGap * scale
 
-        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let thickness = max(1 / backingScale, round(3 * scale * backingScale) / backingScale)
-        let barWidth = compactBar * scale
-        let barY = (midY - thickness / 2).rounded(.down)
-        trackColor.setFill()
-        NSBezierPath(roundedRect: NSRect(x: x, y: barY, width: barWidth, height: thickness),
-                     xRadius: thickness / 2, yRadius: thickness / 2).fill()
-        if let remaining, remaining > 0 {
-            quotaColor(remaining).setFill()
-            NSBezierPath(roundedRect: NSRect(x: x, y: barY, width: barWidth * CGFloat(remaining) / 100, height: thickness),
+        if bar > 0 {
+            let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            let thickness = max(1 / backingScale, round(3 * scale * backingScale) / backingScale)
+            let barWidth = bar * scale
+            let barY = (midY - thickness / 2).rounded(.down)
+            trackColor.setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: barY, width: barWidth, height: thickness),
                          xRadius: thickness / 2, yRadius: thickness / 2).fill()
+            if let remaining, remaining > 0 {
+                quotaColor(remaining).setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: barY, width: barWidth * CGFloat(remaining) / 100, height: thickness),
+                             xRadius: thickness / 2, yRadius: thickness / 2).fill()
+            }
+            x += barWidth + Self.compactValueGap * scale
         }
-        x += barWidth + Self.compactValueGap * scale
         let valueSize = valueString.size()
         valueString.draw(at: NSPoint(x: x, y: midY - valueSize.height / 2))
     }

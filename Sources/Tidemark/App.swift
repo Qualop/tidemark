@@ -116,7 +116,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)))
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        // Belongs to the Space it is shown on (slides away with Codex/Claude when switching
+        // Spaces) and is hidden by Mission Control, whose window shrinking cannot be followed.
+        panel.collectionBehavior = [.moveToActiveSpace, .transient, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
@@ -163,28 +165,20 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         continueWhenAccessibilityIsAvailable()
     }
 
-    /// Claude's control row is thin, so it gets the one-line layout.
+    /// Starting layout per app; show() then adapts it to the free space in the row.
     private func applyLayoutMode() {
-        let compact = targetIsClaude
-        overlayView.update(compact: compact)
-        resizePanel()
+        apply(layout: targetIsClaude ? .bars(UsageOverlayView.compactBarMax) : .twoLine)
     }
 
-    private func resizePanel() {
-        let logical = UsageOverlayView.logicalSize(config: config, compact: overlayView.compact, bar: overlayView.compactBar)
+    private func apply(layout: UsageOverlayView.Layout) {
+        // Ignore bar-length jitter under 2 pt so resizing windows doesn't flicker.
+        if case .bars(let new) = layout, case .bars(let old) = overlayView.layout, abs(new - old) < 2 { return }
+        overlayView.update(layout: layout)
+        let logical = UsageOverlayView.logicalSize(config: config, layout: layout)
         let size = NSSize(width: logical.width * config.visualScale, height: logical.height * config.visualScale)
         guard panel.frame.size != size else { return }
         panel.setContentSize(size)
         overlayView.frame = NSRect(origin: .zero, size: size)
-    }
-
-    /// One-line layout: use the longest bars that fit between the row's controls.
-    private func fitCompactBars(left: CGRect, anchor: CGRect) {
-        let room = (anchor.minX - left.maxX - 32) / config.visualScale
-        let bar = UsageOverlayView.compactBar(fitting: room)
-        guard abs(bar - overlayView.compactBar) >= 2 else { return }
-        overlayView.update(compactBar: bar)
-        resizePanel()
     }
 
     /// Target quit (or another target came to the front): drop the AX observer, timers and
@@ -607,8 +601,18 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         footerLeftAXFrame: CGRect? = nil
     ) {
         let composer = appKitRect(fromAccessibilityRect: composerAXFrame)
-        if overlayView.compact, let footerAnchorAXFrame, let footerLeftAXFrame {
-            fitCompactBars(left: footerLeftAXFrame, anchor: footerAnchorAXFrame)
+        // Free space on the control row: from the last left-side control (or the composer's
+        // left edge) to the model picker, with 12 pt breathing room on each side.
+        var freeSpan: (left: CGFloat, right: CGFloat)?
+        if let footerAnchorAXFrame {
+            let left = footerLeftAXFrame?.maxX ?? composerAXFrame.minX
+            freeSpan = (left, footerAnchorAXFrame.minX)
+            let room = (footerAnchorAXFrame.minX - left - 24) / config.visualScale
+            guard let layout = UsageOverlayView.layout(fitting: room, preferTwoLine: !targetIsClaude, config: config) else {
+                hidePanel() // too narrow for even "5h 20%": never cover the controls
+                return
+            }
+            apply(layout: layout)
         }
         let size = panel.frame.size
         let verticalCenter: CGFloat
@@ -621,13 +625,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         } else {
             verticalCenter = composer.minY + config.bottomOffset
         }
-        let horizontalCenter: CGFloat
-        if let footerAnchorAXFrame, let footerLeftAXFrame,
-           footerAnchorAXFrame.minX - footerLeftAXFrame.maxX >= size.width + 16 {
-            horizontalCenter = (footerLeftAXFrame.maxX + footerAnchorAXFrame.minX) / 2
-        } else {
-            horizontalCenter = composer.midX
-        }
+        let horizontalCenter = freeSpan.map { ($0.left + $0.right) / 2 } ?? composer.midX
         let origin = NSPoint(
             x: horizontalCenter - size.width / 2 + config.horizontalOffset,
             y: verticalCenter - size.height / 2

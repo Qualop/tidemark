@@ -250,7 +250,9 @@ final class HoverCardController {
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)) + 1)
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        // Belongs to the Space it is shown on (slides away with Codex/Claude when switching
+        // Spaces) and is hidden by Mission Control, whose window shrinking cannot be followed.
+        panel.collectionBehavior = [.moveToActiveSpace, .transient, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
