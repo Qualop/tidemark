@@ -11,14 +11,14 @@
 
 ---
 
-Tidemark puts two small bars, **5h** and **7d**, in the empty space of the Codex desktop app's composer. They show how much of your rate limit is left for the model you have selected. Hover over them and a card grows out of the bars like a droplet, showing every provider's quota and when each window resets.
+Tidemark puts two small bars, **5h** and **7d**, in the empty space of the Codex desktop app's composer. They show how much of your rate limit is left for the model you have selected. Hover over them and a card pours out of the bars with the macOS Genie effect, showing every provider's quota and when each window resets.
 
 If you route Claude or other providers into Codex through OpenCodex, Tidemark follows the model picker. Choose `anthropic/claude-…` and the bars switch to your Claude limits; choose a GPT model and they switch back.
 
 ## Features
 
 - **Follows the model picker.** Reads the selected model from the composer and shows the matching quota within about 0.1 s of a change.
-- **Hover card.** All providers at once, each in its own colour, with reset countdowns. A filled dot marks the provider you are using. Blurred background, a droplet animation with no bounce, light and dark mode.
+- **Hover card.** All providers at once, each in its own colour, with reset countdowns. A filled dot marks the provider you are using. Blurred background, the macOS Genie effect in and out, light and dark mode.
 - **Stays out of the way.** Clicks pass straight through. No Dock icon, no menu bar icon, no windows.
 - **Light.** One process using about 11 MB of memory and under 1% of one CPU core while Codex is in front, and close to nothing otherwise. While Codex is closed, Tidemark only waits for it to launch.
 - **Two languages.** English and Korean are separate builds, so each stays as small as possible.
@@ -27,7 +27,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
 
 | | |
 |---|---|
-| macOS | 12 Monterey or later on Apple silicon, 14 Sonoma or later on Intel |
+| macOS | 14 Sonoma or later (Apple silicon and Intel) |
 | Codex | The Codex / ChatGPT desktop app (bundle ID `com.openai.codex`), signed in |
 | Optional | OpenCodex, for Claude and other provider quotas |
 
@@ -41,7 +41,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
    ```
 4. Allow **Accessibility** access when asked (**System Settings → Privacy & Security → Accessibility**). Tidemark uses it to find the composer and read the model picker.
 
-Tidemark adds itself to Login Items on first launch (macOS 13+). You can turn that off in **System Settings → General → Login Items**.
+Tidemark adds itself to Login Items on first launch. You can turn that off in **System Settings → General → Login Items**.
 
 > The app is ad-hoc signed, so after an update macOS may ask for Accessibility permission again. Remove the old entry and allow the new one.
 
@@ -97,6 +97,11 @@ Or quit Tidemark (`pkill -x Tidemark`), delete the app, and remove `~/Library/Ap
 - The composer is found with one Accessibility tree walk that stops as soon as it reaches it. After that, only a few attributes are read, batched into one request per element.
 - Position is checked every 100 ms. The fast follow rate runs only while the window moves or the composer resizes.
 - The pointer is watched only while Codex is frontmost. The hover card is built on first use, drawn as one bitmap plus a few Core Animation layers, and its memory is released when it disappears.
+- The Genie effect warps the card's window in the WindowServer; each animation costs about 10 ms of CPU in Tidemark.
+
+## Credits
+
+The Genie animation comes from [GenieWarpMesh](https://github.com/usagimaru/GenieWarpMesh) by usagimaru (MIT), which uses the private `CGSSetWindowWarp` API.
 
 ## License
 

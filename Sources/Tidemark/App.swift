@@ -718,11 +718,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
 }
 
-/// Opens Tidemark at login (macOS 13+). Registered once; if the user turns it off in
+/// Opens Tidemark at login. Registered once; if the user turns it off in
 /// System Settings it stays off.
 enum LoginItem {
     static func registerOnFirstLaunch() {
-        guard #available(macOS 13, *), Bundle.main.bundleURL.pathExtension == "app" else { return }
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         let marker = OverlayPaths.supportDirectory.appendingPathComponent("login-item-registered")
         guard !FileManager.default.fileExists(atPath: marker.path) else { return }
         try? SMAppService.mainApp.register()

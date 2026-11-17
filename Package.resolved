@@ -1,0 +1,14 @@
+{
+  "pins" : [
+    {
+      "identity" : "geniewarpmesh",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/usagimaru/GenieWarpMesh.git",
+      "state" : {
+        "revision" : "5a6f2a4460dde2c487b0ac4138aa479732ee8d90",
+        "version" : "1.0.1"
+      }
+    }
+  ],
+  "version" : 2
+}

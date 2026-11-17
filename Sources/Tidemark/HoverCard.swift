@@ -1,4 +1,5 @@
 import AppKit
+import GenieWarpMesh
 import QuartzCore
 import TidemarkCore
 
@@ -23,42 +24,39 @@ func quotaColor(_ remaining: Int) -> NSColor {
     return NSColor(calibratedRed: color.x / 255, green: color.y / 255, blue: color.z / 255, alpha: 1)
 }
 
-/// Hover card with every provider's quota. A droplet forms just above the middle of the
-/// overlay, rises a little, then spreads into the card; blur, border and shadow share that one
-/// animated shape. Everything is built on first hover, driven by Core Animation, and the
-/// bitmap is dropped again when hidden.
+/// Hover card with every provider's quota. It comes out of the bars and goes back into them
+/// with the macOS Genie effect (GenieWarpMesh, which warps the window in the WindowServer).
+/// The card itself is static: one bitmap plus a few layers, built on first hover and
+/// released when hidden.
 final class HoverCardController {
-    private static let margin: CGFloat = 24 // room for the shadow
+    private static let margin: CGFloat = 12 // room for the shadow
     private static let width: CGFloat = 240
-    private static let gap: CGFloat = 6
-    /// Spread phase: Apple's "smooth" spring (critically damped, 0.25 s response). No bounce.
-    private static let spreadStiffness: CGFloat = 631
-    private static let spreadDamping: CGFloat = 50.2
-    private static let riseDuration: CFTimeInterval = 0.07
+    private static let gap: CGFloat = 8
     private static let radius: CGFloat = 12
 
     private let anchorFrame: () -> NSRect?
     private let sections: () -> [HoverSection]
     private let darkMode: () -> Bool
+    private let genie = GenieEffect()
     private var panel: PassivePanel?
     private var blurView: NSVisualEffectView?
     private let shadow = CALayer()
-    private let blurMask = CAShapeLayer()
-    private let contentMask = CAShapeLayer()
-    private let border = CAShapeLayer()
-    private let tint = CALayer()
-    private let inner = CALayer()
+    private let surface = CALayer()
     private let content = CALayer()
+    private var barLayers: [CALayer] = []
     private var fills: [CALayer] = []
-    private var cardRect = CGRect.zero
+    private var lastAnchor = NSRect.zero
     private var monitor: Any?
     private var generation = 0
+    private var wantsVisible = false
+    private var genieBusy = false
     private(set) var visible = false
 
     init(anchorFrame: @escaping () -> NSRect?, sections: @escaping () -> [HoverSection], darkMode: @escaping () -> Bool) {
         self.anchorFrame = anchorFrame
         self.sections = sections
         self.darkMode = darkMode
+        genie.adaptiveMesh = true
     }
 
     /// Listen to pointer movement only while Codex is frontmost.
@@ -78,44 +76,21 @@ final class HoverCardController {
     }
 
     func anchorMoved() {
-        guard visible, let panel, let anchor = anchorFrame() else { return }
+        guard visible, !genieBusy, let panel, let anchor = anchorFrame() else { return }
+        lastAnchor = anchor
         panel.setFrameOrigin(origin(for: panel.frame.size, anchor: anchor))
     }
 
     func hide(animated: Bool) {
-        guard visible else { return }
-        visible = false
-        generation += 1
-        let current = generation
-        guard animated else {
-            finishHide()
+        wantsVisible = false
+        if animated {
+            reconcile()
             return
         }
-        let seed = dropletPath(rising: false)
-        let ease = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        CATransaction.setCompletionBlock { [weak self] in
-            guard let self, self.generation == current, !self.visible else { return }
-            self.finishHide()
-        }
-        for layer in [blurMask, contentMask, border] {
-            let shrink = CABasicAnimation(keyPath: "path")
-            shrink.fromValue = layer.presentation()?.path ?? layer.path
-            shrink.duration = 0.12
-            shrink.timingFunction = ease
-            layer.path = seed
-            layer.add(shrink, forKey: "shape")
-        }
-        let shadowShrink = CABasicAnimation(keyPath: "shadowPath")
-        shadowShrink.fromValue = shadow.presentation()?.shadowPath ?? shadow.shadowPath
-        shadowShrink.duration = 0.12
-        shadowShrink.timingFunction = ease
-        shadow.shadowPath = seed
-        shadow.add(shadowShrink, forKey: "shape")
-        fade(inner, to: 0, duration: 0.06)
-        fade(shadow, to: 0, duration: 0.12)
-        CATransaction.commit()
+        guard visible else { return }
+        generation += 1 // completions from a running warp no longer apply
+        visible = false
+        finishHide()
     }
 
     // MARK: Private
@@ -125,46 +100,95 @@ final class HoverCardController {
             hide(animated: false)
             return
         }
-        let inside = anchor.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
-        if inside, !visible {
-            show(anchor: anchor)
-        } else if !inside, visible {
-            hide(animated: true)
+        setWanted(anchor.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation), anchor: anchor)
+    }
+
+    func setWanted(_ wanted: Bool, anchor: NSRect) {
+        wantsVisible = wanted
+        if wanted { lastAnchor = anchor }
+        reconcile()
+    }
+
+    /// GenieEffect ignores calls while it is animating, so the wanted state is applied
+    /// whenever the current warp finishes.
+    private func reconcile() {
+        guard !genieBusy else { return }
+        if wantsVisible, !visible {
+            present()
+        } else if !wantsVisible, visible {
+            dismiss()
         }
     }
 
-    private func show(anchor: NSRect) {
-        visible = true
-        generation += 1
+    private func present() {
+        let anchor = lastAnchor
         let panel = self.panel ?? makePanel()
         let dark = darkMode()
         let scale = NSScreen.screens.first(where: { $0.frame.intersects(anchor) })?.backingScaleFactor ?? 2
         let rendered = HoverCardRenderer.render(sections(), width: Self.width, dark: dark, scale: scale)
+        let card = CGRect(x: Self.margin, y: Self.margin, width: Self.width, height: rendered.height)
         let panelSize = CGSize(width: Self.width + Self.margin * 2, height: rendered.height + Self.margin * 2)
-        cardRect = CGRect(x: Self.margin, y: Self.margin, width: Self.width, height: rendered.height)
         panel.setFrame(NSRect(origin: origin(for: panelSize, anchor: anchor), size: panelSize), display: false)
-        blurView?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        layout(card: card, rendered: rendered, dark: dark, scale: scale)
 
-        let full = CGPath(roundedRect: cardRect, cornerWidth: Self.radius, cornerHeight: Self.radius, transform: nil)
+        visible = true
+        genieBusy = true
+        generation += 1
+        let token = generation
+        genie.duration = 0.28
+        genie.easingType = .easeOutCubic
+        genie.restore(window: panel, from: target(for: anchor), direction: .bottom) { [weak self] in
+            self?.warpFinished(token)
+        }
+        growBars()
+    }
+
+    private func dismiss() {
+        guard let panel else { return }
+        visible = false
+        genieBusy = true
+        generation += 1
+        let token = generation
+        genie.duration = 0.22
+        genie.easingType = .easeInOutCubic
+        genie.minimize(window: panel, to: target(for: anchorFrame() ?? lastAnchor), direction: .bottom) { [weak self] in
+            guard let self else { return }
+            if self.generation == token { self.finishHide() }
+            self.warpFinished(token)
+        }
+    }
+
+    private func warpFinished(_ token: Int) {
+        genieBusy = false
+        reconcile()
+    }
+
+    /// A narrow slit at the middle of the bars: what the card pours out of and back into.
+    private func target(for anchor: NSRect) -> CGRect {
+        CGRect(x: anchor.midX - 36, y: anchor.maxY - 19, width: 72, height: 2)
+    }
+
+    private func layout(card: CGRect, rendered: HoverCardRenderer.Output, dark: Bool, scale: CGFloat) {
+        blurView?.frame = card
+        blurView?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in [blurMask, contentMask, border, shadow, inner] { layer.removeAllAnimations() }
-        for layer in [blurMask, contentMask, border] { layer.path = full }
-        shadow.shadowPath = full
-        shadow.shadowColor = NSColor(calibratedWhite: 0, alpha: dark ? 0.5 : 0.2).cgColor
-        shadow.opacity = 1
-        border.strokeColor = (dark ? NSColor(calibratedWhite: 1, alpha: 0.12) : NSColor(calibratedWhite: 0, alpha: 0.10)).cgColor
-        tint.frame = cardRect
-        tint.backgroundColor = (dark
+        shadow.frame = card
+        shadow.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: card.size),
+                                   cornerWidth: Self.radius, cornerHeight: Self.radius, transform: nil)
+        shadow.shadowColor = NSColor(calibratedWhite: 0, alpha: dark ? 0.5 : 0.22).cgColor
+        surface.frame = card
+        surface.backgroundColor = (dark
             ? NSColor(calibratedRed: 0.10, green: 0.10, blue: 0.11, alpha: 0.45)
             : NSColor(calibratedWhite: 1, alpha: 0.55)).cgColor
-        inner.frame = cardRect
-        inner.opacity = 1
-        content.frame = inner.bounds
+        surface.borderColor = (dark ? NSColor(calibratedWhite: 1, alpha: 0.12) : NSColor(calibratedWhite: 0, alpha: 0.10)).cgColor
+        content.frame = surface.bounds
         content.contentsScale = scale
         content.contents = rendered.image
-        inner.sublayers?.filter { $0 !== content }.forEach { $0.removeFromSuperlayer() }
+
+        barLayers.forEach { $0.removeFromSuperlayer() }
+        barLayers.removeAll()
         fills.removeAll()
         let trackColor = (dark ? NSColor(calibratedWhite: 1, alpha: 0.13) : NSColor(calibratedWhite: 0, alpha: 0.08)).cgColor
         for bar in rendered.bars {
@@ -182,32 +206,21 @@ final class HoverCardController {
             fill.cornerRadius = frame.height / 2
             fill.backgroundColor = quotaColor(bar.remaining).cgColor
             track.addSublayer(fill)
-            inner.addSublayer(track)
+            surface.addSublayer(track)
+            barLayers.append(track)
             fills.append(fill)
         }
         CATransaction.commit()
+    }
 
-        panel.orderFrontRegardless()
-
-        // Droplet: a seed forms above the overlay's centre, rises into a drop, then spreads.
-        for layer in [blurMask, contentMask, border] { layer.add(dropletAnimation("path", to: full), forKey: "shape") }
-        shadow.add(dropletAnimation("shadowPath", to: full), forKey: "shape")
-
+    private func growBars() {
         let now = CACurrentMediaTime()
-        let reveal = CABasicAnimation(keyPath: "opacity")
-        reveal.fromValue = 0
-        reveal.toValue = 1
-        reveal.beginTime = now + Self.riseDuration + 0.03
-        reveal.duration = 0.12
-        reveal.fillMode = .backwards
-        inner.add(reveal, forKey: "fade")
-
         let settle = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
         for (index, fill) in fills.enumerated() {
             let grow = CABasicAnimation(keyPath: "bounds.size.width")
             grow.fromValue = 0
             grow.toValue = fill.bounds.width
-            grow.beginTime = now + Self.riseDuration + 0.05 + Double(index) * 0.02
+            grow.beginTime = now + 0.12 + Double(index) * 0.02
             grow.duration = 0.26
             grow.timingFunction = settle
             grow.fillMode = .backwards
@@ -215,53 +228,11 @@ final class HoverCardController {
         }
     }
 
-    /// Seed -> drop (quick ease-out), then drop -> card (critically damped spring).
-    private func dropletAnimation(_ keyPath: String, to full: CGPath) -> CAAnimation {
-        let rise = CABasicAnimation(keyPath: keyPath)
-        rise.fromValue = dropletPath(rising: false)
-        rise.toValue = dropletPath(rising: true)
-        rise.duration = Self.riseDuration
-        rise.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        let spread = CASpringAnimation(keyPath: keyPath)
-        spread.mass = 1
-        spread.stiffness = Self.spreadStiffness
-        spread.damping = Self.spreadDamping
-        spread.fromValue = dropletPath(rising: true)
-        spread.toValue = full
-        spread.beginTime = Self.riseDuration
-        spread.duration = 0.32 // the critically damped tail is under a point after this
-        let group = CAAnimationGroup()
-        group.animations = [rise, spread]
-        group.duration = Self.riseDuration + spread.duration
-        return group
-    }
-
-    /// The droplet the card grows from and shrinks back into, centred on the card's bottom
-    /// edge (just above the middle of the overlay). Built with the same CGPath primitive as
-    /// the card so the shapes interpolate cleanly.
-    private func dropletPath(rising: Bool) -> CGPath {
-        let size = rising ? CGSize(width: 16, height: 20) : CGSize(width: 10, height: 8)
-        let lift: CGFloat = rising ? 5 : 0
-        let rect = CGRect(x: cardRect.midX - size.width / 2, y: cardRect.minY + lift,
-                          width: size.width, height: size.height)
-        let radius = min(size.width, size.height) / 2 - 0.1
-        return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
-    }
-
-    private func fade(_ layer: CALayer, to value: Float, duration: CFTimeInterval) {
-        let animation = CABasicAnimation(keyPath: "opacity")
-        animation.fromValue = layer.presentation()?.opacity ?? layer.opacity
-        animation.toValue = value
-        animation.duration = duration
-        layer.opacity = value
-        layer.add(animation, forKey: "fade")
-    }
-
     private func finishHide() {
         panel?.orderOut(nil)
-        for layer in [blurMask, contentMask, border, shadow, inner] { layer.removeAllAnimations() }
         content.contents = nil // drop the bitmap while hidden
-        inner.sublayers?.filter { $0 !== content }.forEach { $0.removeFromSuperlayer() }
+        barLayers.forEach { $0.removeFromSuperlayer() }
+        barLayers.removeAll()
         fills.removeAll()
         _ = malloc_zone_pressure_relief(nil, 0)
     }
@@ -286,30 +257,24 @@ final class HoverCardController {
         let container = NSView()
         container.wantsLayer = true
 
-        let shadowHost = hostingView(root: shadow)
         shadow.shadowOpacity = 1
-        shadow.shadowRadius = 16
-        shadow.shadowOffset = CGSize(width: 0, height: -6)
+        shadow.shadowRadius = 9
+        shadow.shadowOffset = CGSize(width: 0, height: -2)
+        let shadowHost = hostingView(root: shadow)
 
         let blur = NSVisualEffectView()
         blur.material = .popover
         blur.blendingMode = .behindWindow
         blur.state = .active
-        blur.wantsLayer = true
-        blur.layer?.mask = blurMask
-        blur.autoresizingMask = [.width, .height]
+        blur.maskImage = Self.roundedMask(radius: Self.radius)
         blurView = blur
 
-        let contentRoot = CALayer()
-        contentRoot.mask = contentMask
+        surface.cornerRadius = Self.radius
+        surface.masksToBounds = true
+        surface.borderWidth = 1
         content.contentsGravity = .resize
-        inner.addSublayer(content)
-        border.fillColor = nil
-        border.lineWidth = 1
-        contentRoot.addSublayer(tint)
-        contentRoot.addSublayer(inner)
-        contentRoot.addSublayer(border)
-        let contentHost = hostingView(root: contentRoot)
+        surface.addSublayer(content)
+        let contentHost = hostingView(root: surface)
 
         for view in [shadowHost, blur, contentHost] { container.addSubview(view) }
         panel.contentView = container
@@ -322,15 +287,28 @@ final class HoverCardController {
         let host = NSView()
         let layer = CALayer()
         layer.addSublayer(root)
-        root.frame = CGRect(x: 0, y: 0, width: 10_000, height: 10_000)
         host.layer = layer
         host.wantsLayer = true
         host.autoresizingMask = [.width, .height]
+        host.frame = NSRect(x: 0, y: 0, width: 10_000, height: 10_000)
         return host
     }
 
+    /// Stretchable rounded-rect mask for the blur view.
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let side = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
+
     private func origin(for size: CGSize, anchor: NSRect) -> NSPoint {
-        // Card is centred over the overlay; its bottom edge sits just above it.
+        // Card is centred over the bars; its bottom edge sits just above them.
         var x = anchor.midX - size.width / 2
         let y = anchor.maxY + Self.gap - Self.margin
         if let visible = NSScreen.screens.first(where: { $0.frame.intersects(anchor) })?.visibleFrame {
