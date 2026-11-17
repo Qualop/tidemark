@@ -12,11 +12,11 @@ final class UsageOverlayView: NSView {
     private(set) var compactBar: CGFloat = UsageOverlayView.compactBarMax
     static let compactBarMax: CGFloat = 90  // same length as the two-line bars
     static let compactBarMin: CGFloat = 36
-    /// One item = label, 4 pt, bar, 5 pt, value. Items are kept tight inside and
+    /// One item = label, 4 pt, bar, 9 pt, value. Items are kept tight inside and
     /// separated by a wider gap with a thin divider, so "5h ━ 20%" reads as one unit.
     private static let compactLabel: CGFloat = 15
     private static let compactLabelGap: CGFloat = 4
-    private static let compactValueGap: CGFloat = 5
+    private static let compactValueGap: CGFloat = 9
     private static let compactValue: CGFloat = 28
     private static let compactItemSpacing: CGFloat = 28
     private static var compactItemFixed: CGFloat { compactLabel + compactLabelGap + compactValueGap + compactValue }
@@ -99,10 +99,10 @@ final class UsageOverlayView: NSView {
             : NSColor(calibratedRed: 218 / 255, green: 218 / 255, blue: 218 / 255, alpha: 1)
 
         let titleString = NSAttributedString(string: title, attributes: [
-            .font: NSFont.systemFont(ofSize: 11 * scale, weight: .semibold), .foregroundColor: titleColor,
+            .font: NSFont.systemFont(ofSize: 11 * scale, weight: .medium), .foregroundColor: titleColor,
         ])
         let valueString = NSAttributedString(string: remaining.map { "\($0)%" } ?? "--", attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5 * scale, weight: .bold), .foregroundColor: valueColor,
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5 * scale, weight: .semibold), .foregroundColor: valueColor,
         ])
         var x = logicalX * scale
         let titleSize = titleString.size()
