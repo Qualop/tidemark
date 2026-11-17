@@ -11,14 +11,14 @@
 
 ---
 
-Tidemark puts two small bars, **5h** and **7d**, in the empty space of the Codex desktop app's composer. They show how much of your rate limit is left for the model you have selected. Hover over them and a card springs out of the corner with every provider's quota and when each window resets.
+Tidemark puts two small bars, **5h** and **7d**, in the empty space of the Codex desktop app's composer. They show how much of your rate limit is left for the model you have selected. Hover over them and a card grows out of the bars like a droplet, showing every provider's quota and when each window resets.
 
 If you route Claude or other providers into Codex through OpenCodex, Tidemark follows the model picker. Choose `anthropic/claude-…` and the bars switch to your Claude limits; choose a GPT model and they switch back.
 
 ## Features
 
 - **Follows the model picker.** Reads the selected model from the composer and shows the matching quota within about 0.1 s of a change.
-- **Hover card.** All providers at once, with reset countdowns. A filled dot marks the provider you are using. Blurred background, droplet animation, light and dark mode.
+- **Hover card.** All providers at once, each in its own colour, with reset countdowns. A filled dot marks the provider you are using. Blurred background, a droplet animation with no bounce, light and dark mode.
 - **Stays out of the way.** Clicks pass straight through. No Dock icon, no menu bar icon, no windows.
 - **Light.** One process using about 11 MB of memory and under 1% of one CPU core while Codex is in front, and close to nothing otherwise. While Codex is closed, Tidemark only waits for it to launch.
 - **Two languages.** English and Korean are separate builds, so each stays as small as possible.

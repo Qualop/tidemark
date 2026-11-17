@@ -626,6 +626,17 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     private func hoverSections() -> [HoverSection] {
         let now = Date()
+        let dark = overlayView.darkMode
+        // Provider colours: Claude terracotta, GPT emerald; lifted a little in dark mode.
+        let claudeColor = dark
+            ? NSColor(calibratedRed: 236 / 255, green: 145 / 255, blue: 112 / 255, alpha: 1)
+            : NSColor(calibratedRed: 201 / 255, green: 100 / 255, blue: 66 / 255, alpha: 1)
+        let gptColor = dark
+            ? NSColor(calibratedRed: 52 / 255, green: 199 / 255, blue: 155 / 255, alpha: 1)
+            : NSColor(calibratedRed: 13 / 255, green: 138 / 255, blue: 106 / 255, alpha: 1)
+        let otherColor = dark
+            ? NSColor(calibratedRed: 160 / 255, green: 140 / 255, blue: 1, alpha: 1)
+            : NSColor(calibratedRed: 99 / 255, green: 82 / 255, blue: 220 / 255, alpha: 1)
         var gpt = CodexAccountQuotaReader.activeWindows(now: now)
         if gpt.isEmpty {
             // OpenCodex not running: fall back to the direct ChatGPT usage response.
@@ -635,6 +646,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         var sections = [
             HoverSection(
                 title: "GPT",
+                color: gptColor,
                 active: quotaSource == .openAI,
                 windows: gpt
             ),
@@ -643,11 +655,12 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         let claude = OpenCodexQuotaReader.windows(provider: "anthropic", now: now)
         let claudeActive = quotaSource == .openCodexProvider("anthropic")
         if !claude.isEmpty || claudeActive {
-            sections.insert(HoverSection(title: "Claude", active: claudeActive, windows: claude), at: 0)
+            sections.insert(HoverSection(title: "Claude", color: claudeColor, active: claudeActive, windows: claude), at: 0)
         }
         if case .openCodexProvider(let provider) = quotaSource, provider != "anthropic" {
             sections.append(HoverSection(
                 title: provider.capitalized,
+                color: otherColor,
                 active: true,
                 windows: OpenCodexQuotaReader.windows(provider: provider, now: now)
             ))

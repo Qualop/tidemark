@@ -4,6 +4,7 @@ import TidemarkCore
 
 struct HoverSection {
     let title: String
+    let color: NSColor
     let active: Bool
     let windows: [QuotaWindow]
 }
@@ -22,13 +23,18 @@ func quotaColor(_ remaining: Int) -> NSColor {
     return NSColor(calibratedRed: color.x / 255, green: color.y / 255, blue: color.z / 255, alpha: 1)
 }
 
-/// Hover card with every provider's quota. It grows out of the overlay's corner like a
-/// droplet: blur, border and shadow share one spring-animated shape. Everything is built on
-/// first hover, driven by Core Animation, and the bitmap is dropped again when hidden.
+/// Hover card with every provider's quota. A droplet forms just above the middle of the
+/// overlay, rises a little, then spreads into the card; blur, border and shadow share that one
+/// animated shape. Everything is built on first hover, driven by Core Animation, and the
+/// bitmap is dropped again when hidden.
 final class HoverCardController {
-    private static let margin: CGFloat = 26 // room for the shadow and spring overshoot
-    private static let width: CGFloat = 256
-    private static let gap: CGFloat = 5
+    private static let margin: CGFloat = 24 // room for the shadow
+    private static let width: CGFloat = 240
+    private static let gap: CGFloat = 6
+    /// Spread phase: Apple's "smooth" spring (critically damped, 0.25 s response). No bounce.
+    private static let spreadStiffness: CGFloat = 631
+    private static let spreadDamping: CGFloat = 50.2
+    private static let riseDuration: CFTimeInterval = 0.07
     private static let radius: CGFloat = 12
 
     private let anchorFrame: () -> NSRect?
@@ -85,29 +91,30 @@ final class HoverCardController {
             finishHide()
             return
         }
-        let blob = blobPath()
+        let seed = dropletPath(rising: false)
+        let ease = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         CATransaction.setCompletionBlock { [weak self] in
             guard let self, self.generation == current, !self.visible else { return }
             self.finishHide()
         }
-        let shrink = CABasicAnimation(keyPath: "path")
-        shrink.duration = 0.1
-        shrink.timingFunction = CAMediaTimingFunction(controlPoints: 0.5, 0, 0.9, 0.4)
         for layer in [blurMask, contentMask, border] {
+            let shrink = CABasicAnimation(keyPath: "path")
             shrink.fromValue = layer.presentation()?.path ?? layer.path
-            layer.path = blob
+            shrink.duration = 0.12
+            shrink.timingFunction = ease
+            layer.path = seed
             layer.add(shrink, forKey: "shape")
         }
         let shadowShrink = CABasicAnimation(keyPath: "shadowPath")
         shadowShrink.fromValue = shadow.presentation()?.shadowPath ?? shadow.shadowPath
-        shadowShrink.duration = 0.1
-        shadowShrink.timingFunction = shrink.timingFunction
-        shadow.shadowPath = blob
+        shadowShrink.duration = 0.12
+        shadowShrink.timingFunction = ease
+        shadow.shadowPath = seed
         shadow.add(shadowShrink, forKey: "shape")
         fade(inner, to: 0, duration: 0.06)
-        fade(shadow, to: 0, duration: 0.1)
+        fade(shadow, to: 0, duration: 0.12)
         CATransaction.commit()
     }
 
@@ -139,7 +146,6 @@ final class HoverCardController {
         blurView?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
 
         let full = CGPath(roundedRect: cardRect, cornerWidth: Self.radius, cornerHeight: Self.radius, transform: nil)
-        let blob = blobPath()
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -183,25 +189,16 @@ final class HoverCardController {
 
         panel.orderFrontRegardless()
 
-        // Droplet: a small bead at the corner springs open into the card.
-        let spring = CASpringAnimation(keyPath: "path")
-        spring.mass = 1
-        spring.stiffness = 560
-        spring.damping = 25
-        spring.fromValue = blob
-        spring.toValue = full
-        spring.duration = min(spring.settlingDuration, 0.42)
-        for layer in [blurMask, contentMask, border] { layer.add(spring, forKey: "shape") }
-        let shadowSpring = spring.copy() as! CASpringAnimation
-        shadowSpring.keyPath = "shadowPath"
-        shadow.add(shadowSpring, forKey: "shape")
+        // Droplet: a seed forms above the overlay's centre, rises into a drop, then spreads.
+        for layer in [blurMask, contentMask, border] { layer.add(dropletAnimation("path", to: full), forKey: "shape") }
+        shadow.add(dropletAnimation("shadowPath", to: full), forKey: "shape")
 
         let now = CACurrentMediaTime()
         let reveal = CABasicAnimation(keyPath: "opacity")
         reveal.fromValue = 0
         reveal.toValue = 1
-        reveal.beginTime = now + 0.035
-        reveal.duration = 0.1
+        reveal.beginTime = now + Self.riseDuration + 0.03
+        reveal.duration = 0.12
         reveal.fillMode = .backwards
         inner.add(reveal, forKey: "fade")
 
@@ -210,18 +207,45 @@ final class HoverCardController {
             let grow = CABasicAnimation(keyPath: "bounds.size.width")
             grow.fromValue = 0
             grow.toValue = fill.bounds.width
-            grow.beginTime = now + 0.05 + Double(index) * 0.025
-            grow.duration = 0.28
+            grow.beginTime = now + Self.riseDuration + 0.05 + Double(index) * 0.02
+            grow.duration = 0.26
             grow.timingFunction = settle
             grow.fillMode = .backwards
             fill.add(grow, forKey: "grow")
         }
     }
 
-    /// The bead the card grows from and shrinks back into: the corner touching the overlay.
-    private func blobPath() -> CGPath {
-        CGPath(roundedRect: CGRect(x: cardRect.minX, y: cardRect.minY, width: 18, height: 16),
-               cornerWidth: 7.9, cornerHeight: 7.9, transform: nil)
+    /// Seed -> drop (quick ease-out), then drop -> card (critically damped spring).
+    private func dropletAnimation(_ keyPath: String, to full: CGPath) -> CAAnimation {
+        let rise = CABasicAnimation(keyPath: keyPath)
+        rise.fromValue = dropletPath(rising: false)
+        rise.toValue = dropletPath(rising: true)
+        rise.duration = Self.riseDuration
+        rise.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        let spread = CASpringAnimation(keyPath: keyPath)
+        spread.mass = 1
+        spread.stiffness = Self.spreadStiffness
+        spread.damping = Self.spreadDamping
+        spread.fromValue = dropletPath(rising: true)
+        spread.toValue = full
+        spread.beginTime = Self.riseDuration
+        spread.duration = 0.32 // the critically damped tail is under a point after this
+        let group = CAAnimationGroup()
+        group.animations = [rise, spread]
+        group.duration = Self.riseDuration + spread.duration
+        return group
+    }
+
+    /// The droplet the card grows from and shrinks back into, centred on the card's bottom
+    /// edge (just above the middle of the overlay). Built with the same CGPath primitive as
+    /// the card so the shapes interpolate cleanly.
+    private func dropletPath(rising: Bool) -> CGPath {
+        let size = rising ? CGSize(width: 16, height: 20) : CGSize(width: 10, height: 8)
+        let lift: CGFloat = rising ? 5 : 0
+        let rect = CGRect(x: cardRect.midX - size.width / 2, y: cardRect.minY + lift,
+                          width: size.width, height: size.height)
+        let radius = min(size.width, size.height) / 2 - 0.1
+        return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     }
 
     private func fade(_ layer: CALayer, to value: Float, duration: CFTimeInterval) {
@@ -306,8 +330,8 @@ final class HoverCardController {
     }
 
     private func origin(for size: CGSize, anchor: NSRect) -> NSPoint {
-        // Card's bottom-left corner sits just above the overlay's top-left corner.
-        var x = anchor.minX + 4 - Self.margin
+        // Card is centred over the overlay; its bottom edge sits just above it.
+        var x = anchor.midX - size.width / 2
         let y = anchor.maxY + Self.gap - Self.margin
         if let visible = NSScreen.screens.first(where: { $0.frame.intersects(anchor) })?.visibleFrame {
             x = min(max(x, visible.minX - Self.margin + 6), visible.maxX - size.width + Self.margin - 6)
@@ -391,8 +415,7 @@ enum HoverCardRenderer {
                 ring.lineWidth = 1.2
                 ring.stroke()
             }
-            text(section.title, titleFont, section.active ? primary : primary.withAlphaComponent(0.78))
-                .draw(at: NSPoint(x: inset + 14, y: y))
+            text(section.title, titleFont, section.color).draw(at: NSPoint(x: inset + 14, y: y))
             y += headerHeight
 
             if section.windows.isEmpty {
@@ -401,9 +424,9 @@ enum HoverCardRenderer {
             }
             for window in section.windows {
                 text(window.label, labelFont, secondary).draw(at: NSPoint(x: inset, y: y + 2))
-                bars.append(Bar(frame: CGRect(x: 42, y: y + 7, width: 86, height: 4), remaining: window.remaining))
+                bars.append(Bar(frame: CGRect(x: 40, y: y + 7, width: 72, height: 4), remaining: window.remaining))
                 let percent = text("\(window.remaining)%", percentFont, primary)
-                percent.draw(at: NSPoint(x: 170 - percent.size().width, y: y + 1.5))
+                percent.draw(at: NSPoint(x: width - 84 - percent.size().width, y: y + 1.5))
                 let reset = text(L10n.resetText(window.resetAt, now: now), resetFont, secondary)
                 reset.draw(at: NSPoint(x: width - inset - reset.size().width, y: y + 2.5))
                 y += rowHeight
