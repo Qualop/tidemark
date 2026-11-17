@@ -16,7 +16,7 @@ mkdir -p dist
 for lang in $LANGS; do
   flags=()
   [[ $lang == ko ]] && flags=(-Xswiftc -DTIDEMARK_KO)
-  args=(-c release --product Tidemark --arch arm64 --arch x86_64 --scratch-path ".build/$lang" $flags)
+  args=(-c release --product Tidemark --arch arm64 --arch x86_64 --scratch-path ".build/$lang" -Xswiftc -Osize $flags)
   swift build $args
   bin="$(swift build $args --show-bin-path)/Tidemark"
 

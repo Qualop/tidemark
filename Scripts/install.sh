@@ -12,8 +12,8 @@ cd "$ROOT"
 
 flags=()
 [[ $UI_LANG == ko ]] && flags=(-Xswiftc -DTIDEMARK_KO)
-swift build -c release --product Tidemark $flags
-BIN="$(swift build -c release --product Tidemark $flags --show-bin-path)/Tidemark"
+swift build -c release --product Tidemark -Xswiftc -Osize $flags
+BIN="$(swift build -c release --product Tidemark -Xswiftc -Osize $flags --show-bin-path)/Tidemark"
 
 pkill -x Tidemark 2>/dev/null || true
 rm -rf "$APP"
