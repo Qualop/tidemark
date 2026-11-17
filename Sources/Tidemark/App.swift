@@ -129,21 +129,53 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         )
     }
 
-    /// Tidemark stays resident but does nothing until Codex is running.
-    private func attachIfTargetRunning() {
-        guard target == nil, attachToRunningTarget() else { return }
+    private var targetIsClaude: Bool { target?.bundleIdentifier == OverlayPaths.claudeBundleIdentifier }
+
+    private static func describe(_ rect: CGRect) -> String {
+        String(format: "x %.0f y %.0f w %.0f h %.0f", rect.minX, rect.minY, rect.width, rect.height)
+    }
+
+    /// In the Claude app the bars always show Claude limits; in Codex they follow the picker.
+    private var effectiveSource: QuotaSource { targetIsClaude ? .openCodexProvider("anthropic") : quotaSource }
+
+    private static func isTarget(_ app: NSRunningApplication?) -> Bool {
+        guard let id = app?.bundleIdentifier else { return false }
+        return OverlayPaths.targetBundleIdentifiers.contains(id)
+    }
+
+    /// Tidemark stays resident but does nothing until Codex or Claude is running.
+    private func attachIfTargetRunning(preferring preferred: NSRunningApplication? = nil) {
+        guard target == nil, attachToRunningTarget(preferring: preferred) else { return }
+        applyLayoutMode()
         startUsageSchedule()
         continueWhenAccessibilityIsAvailable()
     }
 
-    /// Codex quit: drop timers, observers and the mouse monitor so idle cost is ~zero.
-    private func detach() {
+    /// Claude's control row is thin, so it gets the one-line layout.
+    private func applyLayoutMode() {
+        let compact = targetIsClaude
+        let logical = UsageOverlayView.logicalSize(config: config, compact: compact)
+        let size = NSSize(width: logical.width * config.visualScale, height: logical.height * config.visualScale)
+        overlayView.update(compact: compact)
+        if panel.frame.size != size {
+            panel.setContentSize(size)
+            overlayView.frame = NSRect(origin: .zero, size: size)
+        }
+    }
+
+    /// Target quit (or another target came to the front): drop the AX observer, timers and
+    /// the mouse monitor. Usage polling stops only when no target app is left running.
+    private func detach(keepUsage: Bool = false) {
         guard target != nil || trackingTimer != nil else { return }
-        for timer in [trackingTimer, usageTimer, providerQuotaTimer, permissionTimer] { timer?.invalidate() }
+        for timer in [trackingTimer, permissionTimer] { timer?.invalidate() }
         trackingTimer = nil
-        usageTimer = nil
-        providerQuotaTimer = nil
         permissionTimer = nil
+        if !keepUsage {
+            usageTimer?.invalidate()
+            providerQuotaTimer?.invalidate()
+            usageTimer = nil
+            providerQuotaTimer = nil
+        }
         currentInterval = 0
         activeTracking = false
         if let observer {
@@ -163,18 +195,26 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         lastFooterLeftFrame = nil
         lastWindowFrame = nil
         lastAnchorOwnText = nil
+        lastModelLabel = nil
         needsRescan = true
         nextRescanAt = .distantPast
         rescanFailures = 0
         _ = malloc_zone_pressure_relief(nil, 0)
     }
 
-    private func attachToRunningTarget() -> Bool {
-        guard let application = NSRunningApplication.runningApplications(
-            withBundleIdentifier: OverlayPaths.targetBundleIdentifier
-        ).first(where: { !$0.isTerminated }) else { return false }
+    private func attachToRunningTarget(preferring preferred: NSRunningApplication?) -> Bool {
+        let running = NSWorkspace.shared.runningApplications.filter { Self.isTarget($0) && !$0.isTerminated }
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        guard let application = running.first(where: { $0 == preferred })
+            ?? running.first(where: { $0 == frontmost })
+            ?? running.first
+        else { return false }
         target = application
         locator = AccessibilityLocator(processIdentifier: application.processIdentifier)
+        if application.bundleIdentifier == OverlayPaths.claudeBundleIdentifier {
+            // Electron only builds its accessibility tree when asked to.
+            AXUIElementSetAttributeValue(locator!.application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
         return true
     }
 
@@ -420,6 +460,13 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 lastFoundAt = Date()
                 needsRescan = false
                 updateModelLabel(located.modelLabel)
+                SanitizedStatus.writeLayout([
+                    "app": target.bundleIdentifier ?? "",
+                    "composer": Self.describe(located.frame),
+                    "modelSelector": located.footerAnchorFrame.map(Self.describe) ?? "none",
+                    "leftControl": located.footerLeftFrame.map(Self.describe) ?? "none",
+                    "modelLabel": located.modelLabel ?? "",
+                ])
                 registerElementNotifications(
                     window: located.window,
                     composer: located.element,
@@ -532,9 +579,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         let size = panel.frame.size
         let verticalCenter: CGFloat
         if let footerAnchorAXFrame {
-            // Align the visible labels + bars (logical y=0...19.5), not the transparent
-            // 30pt panel bounds, with the actual footer controls. AX is already global.
-            let visibleContentCenterFromTop = 10 * config.visualScale
+            // Align the visible labels + bars (logical y=0...19.5 in the two-line layout,
+            // the whole view in the one-line layout) with the footer controls.
+            let visibleContentCenterFromTop = overlayView.compact ? size.height / 2 : 10 * config.visualScale
             verticalCenter = appKitRect(fromAccessibilityRect: footerAnchorAXFrame).midY
                 + visibleContentCenterFromTop - size.height / 2
         } else {
@@ -580,8 +627,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     private func startUsageSchedule() {
+        guard usageTimer == nil else {
+            applyCurrentSnapshot()
+            return
+        }
         refreshUsage()
-        usageTimer?.invalidate()
         usageTimer = Timer.scheduledTimer(
             withTimeInterval: Double(config.usageRefreshIntervalMs) / 1_000,
             repeats: true
@@ -593,13 +643,15 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         // OpenCodex refreshes its provider quota cache itself; re-reading the file is cheap.
         providerQuotaTimer?.invalidate()
         providerQuotaTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            guard let self, case .openCodexProvider = self.quotaSource else { return }
+            guard let self, case .openCodexProvider = self.effectiveSource else { return }
             self.applyCurrentSnapshot()
         }
         RunLoop.main.add(providerQuotaTimer!, forMode: .common)
     }
 
     private func updateModelLabel(_ label: String?) {
+        // The Claude app's picker never changes which quota is shown.
+        guard !targetIsClaude else { return }
         // Keep the previous choice when the selector text is momentarily unreadable.
         guard let label, !label.isEmpty, label != lastModelLabel else { return }
         lastModelLabel = label
@@ -611,7 +663,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     private func applyCurrentSnapshot() {
-        switch quotaSource {
+        switch effectiveSource {
         case .openAI:
             overlayView.update(snapshot: openAISnapshot)
         case .openCodexProvider(let provider):
@@ -643,21 +695,22 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             if let five = openAISnapshot.fiveHourRemaining { gpt.append(QuotaWindow(label: "5h", remaining: five, resetAt: nil)) }
             if let week = openAISnapshot.weeklyRemaining { gpt.append(QuotaWindow(label: "7d", remaining: week, resetAt: nil)) }
         }
+        let source = effectiveSource
         var sections = [
             HoverSection(
                 title: "GPT",
                 color: gptColor,
-                active: quotaSource == .openAI,
+                active: source == .openAI,
                 windows: gpt
             ),
         ]
         // Claude appears whenever OpenCodex has an Anthropic account (or it is selected).
         let claude = OpenCodexQuotaReader.windows(provider: "anthropic", now: now)
-        let claudeActive = quotaSource == .openCodexProvider("anthropic")
+        let claudeActive = source == .openCodexProvider("anthropic")
         if !claude.isEmpty || claudeActive {
             sections.insert(HoverSection(title: "Claude", color: claudeColor, active: claudeActive, windows: claude), at: 0)
         }
-        if case .openCodexProvider(let provider) = quotaSource, provider != "anthropic" {
+        if case .openCodexProvider(let provider) = source, provider != "anthropic" {
             sections.append(HoverSection(
                 title: provider.capitalized,
                 color: otherColor,
@@ -685,20 +738,25 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     @objc private func targetTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == OverlayPaths.targetBundleIdentifier else { return }
-        detach()
+              Self.isTarget(app), app == target else { return }
+        let othersRunning = NSWorkspace.shared.runningApplications.contains { Self.isTarget($0) && $0 != app && !$0.isTerminated }
+        detach(keepUsage: othersRunning)
+        if othersRunning { attachIfTargetRunning() }
     }
 
     @objc private func targetLaunched(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == OverlayPaths.targetBundleIdentifier else { return }
+              Self.isTarget(app) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.attachIfTargetRunning() }
     }
 
     @objc private func targetActivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == OverlayPaths.targetBundleIdentifier else { return }
-        attachIfTargetRunning()
+              Self.isTarget(app) else { return }
+        if let target, target != app {
+            detach(keepUsage: true) // switch between Codex and Claude
+        }
+        attachIfTargetRunning(preferring: app)
         guard target != nil else { return }
         setTracking(active: true)
         needsRescan = true
@@ -707,7 +765,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     @objc private func targetDeactivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == OverlayPaths.targetBundleIdentifier else { return }
+              Self.isTarget(app), app == target else { return }
         hidePanel()
         setTracking(active: false)
     }

@@ -5,6 +5,13 @@ final class UsageOverlayView: NSView {
     private let config: OverlayConfig
     private(set) var snapshot: UsageSnapshot = .unavailable
     private(set) var darkMode = false
+    /// One-line layout for thin control rows (the Claude app's row is 24 pt tall).
+    private(set) var compact = false
+
+    /// Logical (unscaled) size of each layout.
+    static func logicalSize(config: OverlayConfig, compact: Bool) -> NSSize {
+        compact ? NSSize(width: 196, height: 16) : NSSize(width: config.width, height: config.height)
+    }
 
     override var isOpaque: Bool { false }
 
@@ -31,11 +38,64 @@ final class UsageOverlayView: NSView {
         needsDisplay = true
     }
 
+    func update(compact: Bool) {
+        guard self.compact != compact else { return }
+        self.compact = compact
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.setFill()
         dirtyRect.fill()
+        if compact {
+            drawCompactItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
+            drawCompactItem(logicalX: 104, title: "7d", remaining: snapshot.weeklyRemaining)
+            return
+        }
         drawItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
         drawItem(logicalX: 120, title: "7d", remaining: snapshot.weeklyRemaining)
+    }
+
+    /// "5h ━━━━ 77%" on one line, vertically centred in the view.
+    private func drawCompactItem(logicalX: CGFloat, title: String, remaining: Int?) {
+        let scale = CGFloat(config.visualScale)
+        let midY = bounds.height / 2
+        let titleColor = darkMode
+            ? NSColor(calibratedRed: 166 / 255, green: 166 / 255, blue: 166 / 255, alpha: 1)
+            : NSColor(calibratedRed: 105 / 255, green: 105 / 255, blue: 105 / 255, alpha: 1)
+        let valueColor: NSColor = remaining == nil
+            ? (darkMode ? NSColor(calibratedWhite: 145 / 255, alpha: 1) : NSColor(calibratedWhite: 126 / 255, alpha: 1))
+            : (darkMode ? NSColor(calibratedWhite: 236 / 255, alpha: 1) : NSColor(calibratedWhite: 36 / 255, alpha: 1))
+        let trackColor = darkMode
+            ? NSColor(calibratedRed: 75 / 255, green: 75 / 255, blue: 75 / 255, alpha: 1)
+            : NSColor(calibratedRed: 218 / 255, green: 218 / 255, blue: 218 / 255, alpha: 1)
+
+        let titleString = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 8.5 * scale, weight: .medium), .foregroundColor: titleColor,
+        ])
+        let valueString = NSAttributedString(string: remaining.map { "\($0)%" } ?? "--", attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9 * scale, weight: .bold), .foregroundColor: valueColor,
+        ])
+        var x = logicalX * scale
+        let titleSize = titleString.size()
+        titleString.draw(at: NSPoint(x: x, y: midY - titleSize.height / 2))
+        x += 13 * scale
+
+        let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let thickness = max(1 / backingScale, round(2.5 * scale * backingScale) / backingScale)
+        let barWidth = 46 * scale
+        let barY = (midY - thickness / 2).rounded(.down)
+        trackColor.setFill()
+        NSBezierPath(roundedRect: NSRect(x: x, y: barY, width: barWidth, height: thickness),
+                     xRadius: thickness / 2, yRadius: thickness / 2).fill()
+        if let remaining, remaining > 0 {
+            quotaColor(remaining).setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: barY, width: barWidth * CGFloat(remaining) / 100, height: thickness),
+                         xRadius: thickness / 2, yRadius: thickness / 2).fill()
+        }
+        x += barWidth + 5 * scale
+        let valueSize = valueString.size()
+        valueString.draw(at: NSPoint(x: x, y: midY - valueSize.height / 2))
     }
 
     private func drawItem(logicalX: CGFloat, title: String, remaining: Int?) {

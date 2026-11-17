@@ -165,7 +165,8 @@ final class HoverCardController {
 
     /// A narrow slit at the middle of the bars: what the card pours out of and back into.
     private func target(for anchor: NSRect) -> CGRect {
-        CGRect(x: anchor.midX - 36, y: anchor.maxY - 19, width: 72, height: 2)
+        // Two-line layout: the bar line; one-line layout: just under the row.
+        CGRect(x: anchor.midX - 36, y: max(anchor.minY, anchor.maxY - 19) - 2, width: 72, height: 2)
     }
 
     private func layout(card: CGRect, rendered: HoverCardRenderer.Output, dark: Bool, scale: CGFloat) {
@@ -393,7 +394,9 @@ enum HoverCardRenderer {
                 ring.lineWidth = 1.2
                 ring.stroke()
             }
-            text(section.title, titleFont, section.color).draw(at: NSPoint(x: inset + 14, y: y))
+            // Only the provider in use gets its colour; the other one is grey.
+            text(section.title, titleFont, section.active ? section.color : secondary)
+                .draw(at: NSPoint(x: inset + 14, y: y))
             y += headerHeight
 
             if section.windows.isEmpty {

@@ -7,8 +7,12 @@ public enum OverlayPaths {
     public static let config = supportDirectory.appendingPathComponent("config.json")
     public static let status = supportDirectory.appendingPathComponent("status.json")
     public static let model = supportDirectory.appendingPathComponent("model.json")
+    public static let layout = supportDirectory.appendingPathComponent("layout.json")
     public static let overlayLock = supportDirectory.appendingPathComponent("tidemark.lock")
-    public static let targetBundleIdentifier = "com.openai.codex"
+    public static let codexBundleIdentifier = "com.openai.codex"
+    public static let claudeBundleIdentifier = "com.anthropic.claudefordesktop"
+    /// Apps whose composer gets the bars.
+    public static let targetBundleIdentifiers: Set<String> = [codexBundleIdentifier, claudeBundleIdentifier]
 }
 
 /// Optional overrides in ~/Library/Application Support/Tidemark/config.json.
@@ -107,6 +111,16 @@ public final class ProcessLock {
 }
 
 public enum SanitizedStatus {
+    /// Last located composer geometry, for diagnosing placement. Written only on change.
+    public static func writeLayout(_ object: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+              data != lastLayout else { return }
+        lastLayout = data
+        try? data.write(to: OverlayPaths.layout, options: .atomic)
+    }
+
+    nonisolated(unsafe) private static var lastLayout: Data?
+
     /// Records which model label the overlay read and which quota source it chose.
     public static func writeModel(label: String, source: QuotaSource) {
         let object: [String: Any] = [

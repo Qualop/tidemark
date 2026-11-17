@@ -99,18 +99,23 @@ final class AccessibilityLocator {
         guard let editable = editables.max(by: { $0.score < $1.score }) else { return nil }
         let container = bestContainer(startingAt: editable.element, editableFrame: editable.frame, windowFrame: windowFrame)
 
-        // The footer row lives inside the composer chrome; fall back to its parent if not.
-        var footers = footerControls(under: container.element, windowFrame: windowFrame)
-        var anchor = bestAnchor(footers, editable: editable.frame, container: container.frame)
-        if anchor == nil, let parent: AXUIElement = attribute(container.element, kAXParentAttribute as CFString) {
-            footers = footerControls(under: parent, windowFrame: windowFrame)
+        // The control row is inside the composer (Codex, Claude chat) or right under it
+        // (Claude Code). Search the composer first, then up to three ancestors.
+        var root: AXUIElement? = container.element
+        var footers: [Candidate] = []
+        var anchor: Candidate?
+        for _ in 0..<4 {
+            guard let current = root else { break }
+            footers = footerControls(under: current, container: container.frame)
             anchor = bestAnchor(footers, editable: editable.frame, container: container.frame)
+            if anchor != nil { break }
+            root = attribute(current, kAXParentAttribute as CFString)
         }
         let footerLeft = anchor.flatMap { anchor in
             footers
                 .filter {
                     $0.frame.maxX <= anchor.frame.minX
-                        && $0.frame.minX >= container.frame.minX
+                        && $0.frame.minX >= container.frame.minX - 8
                         && $0.frame.maxX < container.frame.midX
                         && abs($0.frame.midY - anchor.frame.midY) <= 12
                 }
@@ -118,7 +123,7 @@ final class AccessibilityLocator {
         }
         let modelLabel = modelSelectorLabel(
             anchor: anchor?.element,
-            candidates: footers.filter { container.frame.insetBy(dx: -2, dy: -2).contains($0.frame) }
+            candidates: footers
         )
         return LocatedComposer(
             element: container.element,
@@ -141,7 +146,7 @@ final class AccessibilityLocator {
         done: inout Bool,
         output: inout [Candidate]
     ) {
-        guard !done, depth <= 32, visited < 12_000 else { return }
+        guard !done, depth <= 48, visited < 12_000 else { return }
         visited += 1
 
         let values = copyValues(element, [kAXRoleAttribute, kAXChildrenAttribute])
@@ -149,7 +154,7 @@ final class AccessibilityLocator {
         if role == (kAXTextAreaRole as String) || role == (kAXTextFieldRole as String),
            let candidateFrame = frame(of: element),
            candidateFrame.width >= 300,
-           candidateFrame.height >= 24,
+           candidateFrame.height >= 16,
            candidateFrame.height <= 600,
            candidateFrame.intersects(windowFrame) {
             let bottomGap = abs(windowFrame.maxY - candidateFrame.maxY)
@@ -176,7 +181,8 @@ final class AccessibilityLocator {
         }
     }
 
-    private func footerControls(under root: AXUIElement, windowFrame: CGRect) -> [Candidate] {
+    /// Buttons and popups on a row near the composer's bottom edge (AX coordinates: y grows down).
+    private func footerControls(under root: AXUIElement, container: CGRect) -> [Candidate] {
         var output: [Candidate] = []
         var visited = 0
         func walk(_ element: AXUIElement, depth: Int) {
@@ -190,14 +196,18 @@ final class AccessibilityLocator {
                controlFrame.height <= 80,
                controlFrame.width >= 16,
                controlFrame.width <= 420,
-               controlFrame.midY >= windowFrame.maxY - min(180, windowFrame.height * 0.24) {
+               controlFrame.midY >= container.maxY - 60,
+               controlFrame.midY <= container.maxY + 48,
+               controlFrame.minX >= container.minX - 8,
+               controlFrame.maxX <= container.maxX + 8 {
                 let metadata = controlMetadata(element).lowercased()
-                var score = controlFrame.midY - windowFrame.minY
-                score += controlFrame.midX > windowFrame.midX ? 100 : 0
-                score += abs(windowFrame.maxY - controlFrame.maxY) <= 80 ? 180 : 0
+                var score = controlFrame.midY - container.minY
+                score += controlFrame.midX > container.midX ? 100 : 0
                 // Model names change; the composer model selector remains a popup control.
                 if role == (kAXPopUpButtonRole as String), controlFrame.width >= 70 { score += 3_000 }
-                if metadata.contains("model") || metadata.contains("모델") { score += 800 }
+                if metadata.contains("model") || metadata.contains("모델") || QuotaSource.looksLikeModelLabel(metadata) {
+                    score += 800
+                }
                 output.append((element, controlFrame, score))
             }
             for child in values[1] as? [AXUIElement] ?? [] { walk(child, depth: depth + 1) }
@@ -211,8 +221,7 @@ final class AccessibilityLocator {
             .filter {
                 $0.frame.midY >= editable.midY
                     && $0.frame.minX >= container.midX
-                    && $0.frame.maxX <= container.maxX + 2
-                    && $0.frame.maxY <= container.maxY + 2
+                    && $0.frame.maxX <= container.maxX + 8
             }
             .max(by: { $0.score < $1.score })
     }
