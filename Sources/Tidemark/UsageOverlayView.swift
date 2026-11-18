@@ -216,7 +216,7 @@ final class UsageOverlayView: NSView {
     }
 
     private static func twoLinePlanFont(scale: CGFloat) -> NSFont {
-        NSFont.systemFont(ofSize: 9.5 * scale, weight: .medium)
+        NSFont.systemFont(ofSize: 10.5 * scale, weight: .medium)
     }
 
     /// Centre of the two-line band (label row plus bar), measured from the top in logical points.
