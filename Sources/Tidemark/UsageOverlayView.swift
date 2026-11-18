@@ -113,8 +113,16 @@ final class UsageOverlayView: NSView {
         switch layout {
         case .twoLine:
             if snapshot.showsPlan, let plan = snapshot.plan {
-                // One window only: a single centred item labelled "Ultra · 7d".
-                drawItem(logicalX: (CGFloat(config.width) - 101) / 2, title: "\(plan) · \(long)",
+                // One window only: "Ultra | 7d ━━ 99%", centred as a group. The plan sits on the
+                // left, vertically centred on the label-and-bar band, like the Claude one-line row.
+                let planWidth = NSAttributedString(string: plan, attributes: [.font: Self.twoLinePlanFont(scale: 1)])
+                    .size().width.rounded(.up)
+                let gap: CGFloat = 8
+                let group = planWidth + gap * 2 + 1 + 101 * 0.95
+                let start = ((CGFloat(config.width) - group) / 2).rounded()
+                drawTwoLinePlan(plan, logicalX: start)
+                drawTwoLineDivider(logicalX: start + planWidth + gap)
+                drawItem(logicalX: start + planWidth + gap * 2 + 1 - 101 * 0.05, title: long,
                          remaining: snapshot.weeklyRemaining)
             } else {
                 drawItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
@@ -205,6 +213,30 @@ final class UsageOverlayView: NSView {
         ])
         let size = string.size()
         string.draw(at: NSPoint(x: logicalX * scale, y: bounds.height / 2 - size.height / 2))
+    }
+
+    private static func twoLinePlanFont(scale: CGFloat) -> NSFont {
+        NSFont.systemFont(ofSize: 9.5 * scale, weight: .medium)
+    }
+
+    /// Centre of the two-line band (label row plus bar), measured from the top in logical points.
+    private static let twoLineBandCenter: CGFloat = 10
+
+    private func drawTwoLinePlan(_ plan: String, logicalX: CGFloat) {
+        let scale = CGFloat(config.visualScale)
+        let string = NSAttributedString(string: plan, attributes: [
+            .font: Self.twoLinePlanFont(scale: scale), .foregroundColor: planColor,
+        ])
+        let size = string.size()
+        string.draw(at: NSPoint(x: logicalX * scale, y: bounds.height - Self.twoLineBandCenter * scale - size.height / 2))
+    }
+
+    private func drawTwoLineDivider(logicalX: CGFloat) {
+        let scale = CGFloat(config.visualScale)
+        let height = 11 * scale
+        (darkMode ? NSColor(calibratedWhite: 1, alpha: 0.16) : NSColor(calibratedWhite: 0, alpha: 0.14)).setFill()
+        NSRect(x: (logicalX * scale).rounded(), y: bounds.height - Self.twoLineBandCenter * scale - height / 2,
+               width: 1, height: height).fill()
     }
 
     private func drawCompactDivider(logicalX: CGFloat) {
