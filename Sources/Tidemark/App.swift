@@ -72,6 +72,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     /// Each app's reply speed, from its own session log (FSEvents; idle when nothing is written).
     private let codexSpeed = TokenSpeedMonitor(app: .codex)
     private let claudeSpeed = TokenSpeedMonitor(app: .claude)
+    private var activityWorkItem: DispatchWorkItem?
+    private var lastUsageFetchAt = Date.distantPast
+    private var openAIFetchedAt: Date?
     private var claudeRefreshInFlight = false
     private var sourceStatus: [String: String] = [:]
     private let geminiFetcher = GeminiQuotaFetcher()
@@ -165,6 +168,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private func attachIfTargetRunning(preferring preferred: NSRunningApplication? = nil) {
         guard target == nil, attachToRunningTarget(preferring: preferred) else { return }
         applyLayoutMode()
+        codexSpeed.onReply = { [weak self] in self?.activityRefresh() }
+        claudeSpeed.onReply = { [weak self] in self?.activityRefresh() }
         codexSpeed.start()
         claudeSpeed.start()
         startUsageSchedule()
@@ -722,25 +727,45 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Claude limits, best source first: Claude Code's login (opt-in Keychain, fresh within
-    /// 10 minutes), OpenCodex's cache, then the Claude app's own usage control (5h only).
-    private func claudeWindows(now: Date) -> [QuotaWindow] {
+    /// Claude limits from the freshest source: Claude Code's login (opt-in Keychain) or
+    /// OpenCodex's cache, whichever was refreshed last; the Claude app's own live usage
+    /// indicator replaces the 5h value whenever it is newer than both.
+    private func claudeReading(now: Date) -> (windows: [QuotaWindow], updatedAt: Date?, source: String) {
+        var base: (windows: [QuotaWindow], updatedAt: Date?, source: String) = ([], nil, "none")
         if let claudeDirect, now.timeIntervalSince(claudeDirect.at) < 600, !claudeDirect.windows.isEmpty {
-            return claudeDirect.windows
+            base = (claudeDirect.windows, claudeDirect.at, "direct")
         }
-        let cached = OpenCodexQuotaReader.windows(provider: "anthropic", now: now)
-        if !cached.isEmpty { return cached }
-        if let claudeAppUsage, now.timeIntervalSince(claudeAppUsage.at) < 1_800 {
-            return [QuotaWindow(label: "5h", remaining: claudeAppUsage.remaining, resetAt: nil)]
+        let cache = OpenCodexQuotaReader.reading(provider: "anthropic", now: now)
+        if !cache.windows.isEmpty, base.windows.isEmpty || (cache.updatedAt ?? .distantPast) > (base.updatedAt ?? .distantPast) {
+            base = (cache.windows, cache.updatedAt, "opencodex")
         }
-        return []
+        if let app = claudeAppUsage, now.timeIntervalSince(app.at) < 1_800, app.at > (base.updatedAt ?? .distantPast) {
+            let reset = base.windows.first { $0.label == "5h" }?.resetAt
+            let windows = [QuotaWindow(label: "5h", remaining: app.remaining, resetAt: reset)]
+                + base.windows.filter { $0.label != "5h" }
+            return (windows, base.updatedAt ?? app.at, base.windows.isEmpty ? "claude-app" : base.source + "+claude-app")
+        }
+        return base
     }
 
-    private func claudeSourceName(now: Date) -> String {
-        if let claudeDirect, now.timeIntervalSince(claudeDirect.at) < 600, !claudeDirect.windows.isEmpty { return "direct" }
-        if !OpenCodexQuotaReader.windows(provider: "anthropic", now: now).isEmpty { return "opencodex" }
-        if let claudeAppUsage, now.timeIntervalSince(claudeAppUsage.at) < 1_800 { return "claude-app" }
-        return "none"
+    private func claudeWindows(now: Date) -> [QuotaWindow] { claudeReading(now: now).windows }
+
+    private func claudeSourceName(now: Date) -> String { claudeReading(now: now).source }
+
+    /// A reply just finished in Codex or Claude: usage changed, so refresh soon (debounced,
+    /// and the ChatGPT request at most every 15 s) instead of waiting for the next minute.
+    private func activityRefresh() {
+        activityWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.target != nil else { return }
+            if Date().timeIntervalSince(self.lastUsageFetchAt) >= 15 {
+                self.refreshUsage()
+            } else {
+                self.applyCurrentSnapshot()
+            }
+        }
+        activityWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
     }
 
     /// Cheap read of the Claude app's usage control (one batched AX request).
@@ -790,14 +815,16 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 title: "GPT",
                 color: gptColor,
                 active: source == .openAI,
-                windows: gpt
+                windows: gpt,
+                updatedAt: openAIWindows.isEmpty ? nil : openAIFetchedAt
             ),
         ]
         // Claude appears whenever Claude Code or OpenCodex has a Claude login (or it is selected).
-        let claude = claudeWindows(now: now)
+        let claude = claudeReading(now: now)
         let claudeActive = source == .openCodexProvider("anthropic")
-        if !claude.isEmpty || claudeActive {
-            sections.insert(HoverSection(title: "Claude", color: claudeColor, active: claudeActive, windows: claude), at: 0)
+        if !claude.windows.isEmpty || claudeActive {
+            sections.insert(HoverSection(title: "Claude", color: claudeColor, active: claudeActive,
+                                         windows: claude.windows, updatedAt: claude.updatedAt), at: 0)
         }
         // Gemini appears when Gemini CLI is signed in.
         var geminiActive = false
@@ -848,6 +875,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     private func refreshUsage() {
+        lastUsageFetchAt = Date()
         refreshDirectQuota()
         guard !usageRefreshInFlight else { return }
         usageRefreshInFlight = true
@@ -857,6 +885,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 self.openAISnapshot = result?.snapshot ?? .unavailable
                 self.openAIWindows = result?.windows ?? []
+                if result != nil { self.openAIFetchedAt = Date() }
                 self.sourceStatus["codexSpeed"] = self.codexSpeed.latest.map { "\(Int($0.tokensPerSecond.rounded())) tok/s" } ?? "none"
                 self.sourceStatus["claudeSpeed"] = self.claudeSpeed.latest.map { "\(Int($0.tokensPerSecond.rounded())) tok/s" } ?? "none"
                 self.sourceStatus["gpt"] = result != nil ? "direct"
@@ -891,6 +920,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         }
         attachIfTargetRunning(preferring: app)
         guard target != nil else { return }
+        if Date().timeIntervalSince(lastUsageFetchAt) >= 15 { refreshUsage() } // fresh numbers on return
         setTracking(active: true)
         needsRescan = true
         tick()

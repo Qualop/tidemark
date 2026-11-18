@@ -157,6 +157,8 @@ public final class TokenSpeedMonitor {
     private var stream: FSEventStreamRef?
     private var files: [String: FileState] = [:]
     public private(set) var latest: TokenSpeed?
+    /// Called after a reply finishes, so quota can be refreshed right when it changes.
+    public var onReply: (() -> Void)?
     private var byModel: [String: TokenSpeed] = [:]
 
     /// Latest speed of each model used recently, newest first.
@@ -234,10 +236,13 @@ public final class TokenSpeedMonitor {
             state.carry = data
             data = Data()
         }
+        var sawReply = false
+        defer { if sawReply { onReply?() } }
         for line in data.split(separator: UInt8(ascii: "\n")) {
             guard let object = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else { continue }
             let result = app == .codex ? state.codex.feed(object) : state.claude.feed(object)
             guard let result else { continue }
+            sawReply = true
             if result.at >= (latest?.at ?? .distantPast) { latest = result }
             if result.at >= (byModel[result.model]?.at ?? .distantPast) { byModel[result.model] = result }
         }

@@ -14,6 +14,8 @@ struct HoverSection {
     let color: NSColor
     let active: Bool
     let windows: [QuotaWindow]
+    /// When the numbers were last refreshed; shown on the card once they are stale.
+    var updatedAt: Date? = nil
 }
 
 /// Bar color shared with the inline overlay: red (empty) -> yellow -> green (full).
@@ -416,6 +418,10 @@ enum HoverCardRenderer {
             // Only the provider in use gets its colour; the other one is grey.
             text(section.title, titleFont, section.active ? section.color : secondary)
                 .draw(at: NSPoint(x: inset + 14, y: y))
+            if let updated = section.updatedAt, now.timeIntervalSince(updated) > 120 {
+                let stale = text(L10n.updatedAgo(updated, now: now), resetFont, secondary)
+                stale.draw(at: NSPoint(x: width - inset - stale.size().width, y: y + 2.5))
+            }
             y += headerHeight
 
             if section.windows.isEmpty {

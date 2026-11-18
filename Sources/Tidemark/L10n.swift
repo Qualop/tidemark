@@ -7,6 +7,11 @@ enum L10n {
     static let noData = "정보 없음"
     static let speedTitle = "토큰 속도 (최근 응답)"
 
+    static func updatedAgo(_ date: Date, now: Date) -> String {
+        let minutes = Int(now.timeIntervalSince(date) / 60)
+        return minutes < 60 ? "\(minutes)분 전 갱신" : "\(minutes / 60)시간 전 갱신"
+    }
+
     static func ago(_ date: Date, now: Date) -> String {
         let minutes = Int(now.timeIntervalSince(date) / 60)
         if minutes < 1 { return "방금" }
@@ -24,6 +29,11 @@ enum L10n {
 #else
     static let noData = "No data"
     static let speedTitle = "Token speed (last reply)"
+
+    static func updatedAgo(_ date: Date, now: Date) -> String {
+        let minutes = Int(now.timeIntervalSince(date) / 60)
+        return minutes < 60 ? "updated \(minutes)m ago" : "updated \(minutes / 60)h ago"
+    }
 
     static func ago(_ date: Date, now: Date) -> String {
         let minutes = Int(now.timeIntervalSince(date) / 60)

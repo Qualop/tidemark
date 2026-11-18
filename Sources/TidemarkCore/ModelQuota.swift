@@ -64,6 +64,13 @@ public enum OpenCodexQuotaReader {
         return parse(data: data, provider: provider, now: now)
     }
 
+    /// Windows plus when OpenCodex last refreshed them.
+    public static func reading(provider: String, now: Date = Date()) -> (windows: [QuotaWindow], updatedAt: Date?) {
+        guard let data = try? Data(contentsOf: cacheURL), let row = row(data: data, provider: provider) else { return ([], nil) }
+        let updated = QuotaRow.number(row["updatedAt"]).map { Date(timeIntervalSince1970: $0 / 1_000) }
+        return (QuotaRow.windows(row, now: now), updated)
+    }
+
     /// All windows (with reset times) for the hover card.
     public static func windows(provider: String, now: Date = Date()) -> [QuotaWindow] {
         guard let data = try? Data(contentsOf: cacheURL), let row = row(data: data, provider: provider) else { return [] }
