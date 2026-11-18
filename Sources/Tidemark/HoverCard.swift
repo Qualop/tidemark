@@ -3,6 +3,12 @@ import GenieWarpMesh
 import QuartzCore
 import TidemarkCore
 
+/// One app's recent reply speeds, one per model, measured from that app's own session log.
+struct SpeedGroup {
+    let app: String
+    let models: [TokenSpeed]
+}
+
 struct HoverSection {
     let title: String
     let color: NSColor
@@ -36,6 +42,7 @@ final class HoverCardController {
 
     private let anchorFrame: () -> NSRect?
     private let sections: () -> [HoverSection]
+    private let speeds: () -> [SpeedGroup]
     private let darkMode: () -> Bool
     private let genie = GenieEffect()
     private var panel: PassivePanel?
@@ -52,7 +59,9 @@ final class HoverCardController {
     private var genieBusy = false
     private(set) var visible = false
 
-    init(anchorFrame: @escaping () -> NSRect?, sections: @escaping () -> [HoverSection], darkMode: @escaping () -> Bool) {
+    init(anchorFrame: @escaping () -> NSRect?, sections: @escaping () -> [HoverSection],
+         speeds: @escaping () -> [SpeedGroup], darkMode: @escaping () -> Bool) {
+        self.speeds = speeds
         self.anchorFrame = anchorFrame
         self.sections = sections
         self.darkMode = darkMode
@@ -125,7 +134,7 @@ final class HoverCardController {
         let panel = self.panel ?? makePanel()
         let dark = darkMode()
         let scale = NSScreen.screens.first(where: { $0.frame.intersects(anchor) })?.backingScaleFactor ?? 2
-        let rendered = HoverCardRenderer.render(sections(), width: Self.width, dark: dark, scale: scale)
+        let rendered = HoverCardRenderer.render(sections(), speeds: speeds(), width: Self.width, dark: dark, scale: scale)
         let card = CGRect(x: Self.margin, y: Self.margin, width: Self.width, height: rendered.height)
         let panelSize = CGSize(width: Self.width + Self.margin * 2, height: rendered.height + Self.margin * 2)
         panel.setFrame(NSRect(origin: origin(for: panelSize, anchor: anchor), size: panelSize), display: false)
@@ -338,11 +347,19 @@ enum HoverCardRenderer {
     private static let headerHeight: CGFloat = 21
     private static let rowHeight: CGFloat = 18
     private static let sectionGap: CGFloat = 17
+    private static let speedHeader: CGFloat = 17
+    private static let groupHeader: CGFloat = 17
+    private static let groupFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
 
-    static func render(_ sections: [HoverSection], width: CGFloat, dark: Bool, scale: CGFloat, now: Date = Date()) -> Output {
+    static func render(_ sections: [HoverSection], speeds: [SpeedGroup] = [], width: CGFloat, dark: Bool,
+                       scale: CGFloat, now: Date = Date()) -> Output {
         var height: CGFloat = 12 + 8
         for (index, section) in sections.enumerated() {
             height += (index > 0 ? sectionGap : 0) + headerHeight + CGFloat(max(section.windows.count, 1)) * rowHeight
+        }
+        if !speeds.isEmpty {
+            height += sectionGap + speedHeader
+            for group in speeds { height += groupHeader + CGFloat(max(group.models.count, 1)) * rowHeight }
         }
 
         let pixelWidth = Int((width * scale).rounded(.up))
@@ -413,6 +430,31 @@ enum HoverCardRenderer {
                 let reset = text(L10n.resetText(window.resetAt, now: now), resetFont, secondary)
                 reset.draw(at: NSPoint(x: width - inset - reset.size().width, y: y + 2.5))
                 y += rowHeight
+            }
+        }
+        if !speeds.isEmpty {
+            y += 8
+            divider.setFill()
+            NSRect(x: inset, y: y, width: width - inset * 2, height: 0.5).fill()
+            y += sectionGap - 8
+            text(L10n.speedTitle, labelFont, secondary).draw(at: NSPoint(x: inset, y: y))
+            y += speedHeader
+            for group in speeds {
+                text(group.app, groupFont, primary.withAlphaComponent(0.9)).draw(at: NSPoint(x: inset, y: y + 1))
+                y += groupHeader
+                if group.models.isEmpty {
+                    text("--", labelFont, secondary).draw(at: NSPoint(x: inset + 8, y: y + 2))
+                    y += rowHeight
+                }
+                for speed in group.models {
+                    let name = speed.model.isEmpty ? "?" : speed.model
+                    text(name, labelFont, secondary).draw(at: NSPoint(x: inset + 8, y: y + 2))
+                    let value = text("\(Int(speed.tokensPerSecond.rounded())) tok/s", percentFont, primary)
+                    value.draw(at: NSPoint(x: width - 84 - value.size().width, y: y + 1.5))
+                    let age = text(L10n.ago(speed.at, now: now), resetFont, secondary)
+                    age.draw(at: NSPoint(x: width - inset - age.size().width, y: y + 2.5))
+                    y += rowHeight
+                }
             }
         }
         NSGraphicsContext.restoreGraphicsState()

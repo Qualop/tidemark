@@ -20,7 +20,8 @@ final class UsageWindowParserTests {
         checks.testOpenCodexCacheUsesProviderRowAsUsedPercent()
         checks.testCodexAccountRowWithSecondResets()
         checks.testDirectSourceParsers()
-        print("PASS: 11 quota regression checks")
+        checks.testTokenSpeedTrackers()
+        print("PASS: 12 quota regression checks")
     }
     private func window(_ seconds: Int, _ used: Double) -> [String: Any] {
         ["limit_window_seconds": seconds, "used_percent": used]
@@ -119,6 +120,49 @@ final class UsageWindowParserTests {
         let windows = QuotaRow.windows(["monthlyPercent": 1, "monthlyResetAt": 1_797_494_415, "updatedAt": 1], now: now)
         precondition(windows == [QuotaWindow(label: "30d", remaining: 99,
                                              resetAt: Date(timeIntervalSince1970: 1_797_494_415))], "\(windows)")
+    }
+
+    func testTokenSpeedTrackers() {
+        // Codex: input (tool output) at :00, reply of 500 output tokens ends at :05 -> 100 tok/s.
+        var codex = CodexSpeedTracker()
+        _ = codex.feed(["timestamp": "2026-11-17T08:38:00.000Z", "type": "response_item",
+                        "payload": ["type": "function_call_output"]])
+        let codexSpeed = codex.feed(["timestamp": "2026-11-17T08:38:05.000Z", "type": "event_msg",
+                                     "payload": ["type": "token_count", "info": ["last_token_usage": ["output_tokens": 500]]]])
+        precondition(codexSpeed.map { Int($0.tokensPerSecond) } == 100, "\(String(describing: codexSpeed))")
+        // A token_count without a preceding input is not a measurement.
+        precondition(codex.feed(["timestamp": "2026-11-17T08:38:09.000Z", "type": "event_msg",
+                                 "payload": ["type": "token_count", "info": ["last_token_usage": ["output_tokens": 50]]]]) == nil)
+        // Current Codex: the reply ends at token_usage_record; token_count comes after the tool
+        // runs and must not be measured (it would give a near-zero duration).
+        var current = CodexSpeedTracker()
+        _ = current.feed(["timestamp": "2026-11-17T18:45:00.000Z", "type": "response_item",
+                          "payload": ["type": "custom_tool_call_output"]])
+        let record = current.feed(["timestamp": "2026-11-17T18:45:10.000Z", "type": "token_usage_record",
+                                   "payload": ["usage": ["output_tokens": 900]]])
+        precondition(record.map { Int($0.tokensPerSecond) } == 90, "\(String(describing: record))")
+        _ = current.feed(["timestamp": "2026-11-17T18:45:14.340Z", "type": "response_item",
+                          "payload": ["type": "custom_tool_call_output"]])
+        precondition(current.feed(["timestamp": "2026-11-17T18:45:14.341Z", "type": "event_msg",
+                                   "payload": ["type": "token_count", "info": ["last_token_usage": ["output_tokens": 900]]]]) == nil)
+        precondition(CodexSpeedTracker.isDesktopSession(["payload": ["originator": "Codex Desktop", "source": "vscode"]]))
+        precondition(!CodexSpeedTracker.isDesktopSession(["payload": ["originator": "Codex Desktop", "source": ["subagent": ["other": "guardian"]]]]))
+        precondition(!CodexSpeedTracker.isDesktopSession(["payload": ["originator": "codex_cli_rs"]]))
+
+        // Claude: api-request at :39.084, 518 tokens, last line at :44.510 -> ~95 tok/s.
+        var claude = ClaudeSpeedTracker()
+        _ = claude.feed(["timestamp": "2026-11-17T18:44:39.084Z", "type": "api-request"])
+        let line: [String: Any] = ["timestamp": "2026-11-17T18:44:44.510Z", "type": "assistant", "entrypoint": "claude-desktop",
+                                   "message": ["id": "msg_1", "usage": ["output_tokens": 518]]]
+        precondition(claude.feed(line).map { Int($0.tokensPerSecond) } == 95)
+        var cli = line
+        cli["entrypoint"] = "cli"
+        precondition(claude.feed(cli) == nil, "terminal Claude Code is not the app")
+        // Model names as shown in the card.
+        precondition(ModelName.display("anthropic/claude-opus-5-5") == "Opus 5.5")
+        precondition(ModelName.display("claude-sonnet-4-5-20250929") == "Sonnet 4.5")
+        precondition(ModelName.display("ocx-claude-native--gpt-6.1-sol[1m]") == "GPT 6.1 Sol")
+        precondition(ModelName.display("gpt-5.5-codex") == "GPT 5.5 Codex")
     }
 
     func testDirectSourceParsers() {

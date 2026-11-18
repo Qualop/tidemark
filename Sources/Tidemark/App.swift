@@ -50,6 +50,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             return self.panel.frame
         },
         sections: { [weak self] in self?.hoverSections() ?? [] },
+        speeds: { [weak self] in self?.speedGroups() ?? [] },
         darkMode: { [weak self] in self?.overlayView.darkMode ?? false }
     )
     private var needsRescan = true
@@ -68,6 +69,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var lastUsageReadAt = Date.distantPast
     private var geminiWindows: [QuotaWindow] = []
     private let claudeFetcher = ClaudeQuotaFetcher()
+    /// Each app's reply speed, from its own session log (FSEvents; idle when nothing is written).
+    private let codexSpeed = TokenSpeedMonitor(app: .codex)
+    private let claudeSpeed = TokenSpeedMonitor(app: .claude)
     private var claudeRefreshInFlight = false
     private var sourceStatus: [String: String] = [:]
     private let geminiFetcher = GeminiQuotaFetcher()
@@ -161,6 +165,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private func attachIfTargetRunning(preferring preferred: NSRunningApplication? = nil) {
         guard target == nil, attachToRunningTarget(preferring: preferred) else { return }
         applyLayoutMode()
+        codexSpeed.start()
+        claudeSpeed.start()
         startUsageSchedule()
         continueWhenAccessibilityIsAvailable()
     }
@@ -189,6 +195,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         trackingTimer = nil
         permissionTimer = nil
         if !keepUsage {
+            codexSpeed.stop()
+            claudeSpeed.stop()
             usageTimer?.invalidate()
             providerQuotaTimer?.invalidate()
             usageTimer = nil
@@ -485,6 +493,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                     "app": target.bundleIdentifier ?? "",
                     "composer": Self.describe(located.frame),
                     "modelSelector": located.footerAnchorFrame.map(Self.describe) ?? "none",
+                    "selectorRole": located.footerAnchorElement.map { locator.role(of: $0) } ?? "none",
                     "leftControl": located.footerLeftFrame.map(Self.describe) ?? "none",
                     "modelLabel": located.modelLabel ?? "",
                 ])
@@ -600,6 +609,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         footerAnchorAXFrame: CGRect? = nil,
         footerLeftAXFrame: CGRect? = nil
     ) {
+        // Without the control row there is no safe spot: hide rather than cover text or buttons.
+        guard footerAnchorAXFrame != nil else {
+            hidePanel()
+            return
+        }
         let composer = appKitRect(fromAccessibilityRect: composerAXFrame)
         // Free space on the control row: from the last left-side control (or the composer's
         // left edge) to the model picker, with 12 pt breathing room on each side.
@@ -743,6 +757,13 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Per app, the models used in the last day with their latest speed; the app in front first.
+    private func speedGroups() -> [SpeedGroup] {
+        let codex = SpeedGroup(app: "Codex", models: codexSpeed.recentModels())
+        let claude = SpeedGroup(app: "Claude", models: claudeSpeed.recentModels())
+        return targetIsClaude ? [claude, codex] : [codex, claude]
+    }
+
     private func hidePanel() {
         panel.orderOut(nil)
         hoverCard.hide(animated: false)
@@ -836,6 +857,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 self.openAISnapshot = result?.snapshot ?? .unavailable
                 self.openAIWindows = result?.windows ?? []
+                self.sourceStatus["codexSpeed"] = self.codexSpeed.latest.map { "\(Int($0.tokensPerSecond.rounded())) tok/s" } ?? "none"
+                self.sourceStatus["claudeSpeed"] = self.claudeSpeed.latest.map { "\(Int($0.tokensPerSecond.rounded())) tok/s" } ?? "none"
                 self.sourceStatus["gpt"] = result != nil ? "direct"
                     : (CodexAccountQuotaReader.activeWindows(now: Date()).isEmpty ? "none" : "opencodex")
                 SanitizedStatus.writeSources(self.sourceStatus)

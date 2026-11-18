@@ -5,6 +5,15 @@ import Foundation
 enum L10n {
 #if TIDEMARK_KO
     static let noData = "정보 없음"
+    static let speedTitle = "토큰 속도 (최근 응답)"
+
+    static func ago(_ date: Date, now: Date) -> String {
+        let minutes = Int(now.timeIntervalSince(date) / 60)
+        if minutes < 1 { return "방금" }
+        if minutes < 60 { return "\(minutes)분 전" }
+        if minutes < 1_440 { return "\(minutes / 60)시간 전" }
+        return "\(minutes / 1_440)일 전"
+    }
 
     static func resetText(_ date: Date?, now: Date) -> String {
         guard let parts = parts(date, now: now) else { return date == nil ? "" : "곧 초기화" }
@@ -14,6 +23,15 @@ enum L10n {
     }
 #else
     static let noData = "No data"
+    static let speedTitle = "Token speed (last reply)"
+
+    static func ago(_ date: Date, now: Date) -> String {
+        let minutes = Int(now.timeIntervalSince(date) / 60)
+        if minutes < 1 { return "just now" }
+        if minutes < 60 { return "\(minutes)m ago" }
+        if minutes < 1_440 { return "\(minutes / 60)h ago" }
+        return "\(minutes / 1_440)d ago"
+    }
 
     static func resetText(_ date: Date?, now: Date) -> String {
         guard let parts = parts(date, now: now) else { return date == nil ? "" : "resets soon" }

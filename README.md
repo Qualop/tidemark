@@ -20,6 +20,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
 - **Follows the model picker.** Reads the selected model from the composer and shows the matching quota within about 0.1 s of a change.
 - **Codex and Claude.** Works in both desktop apps and follows whichever one is in front. Claude's control row is thin, so there the bars switch to a one-line layout.
 - **Hover card.** All providers at once, with reset countdowns. The provider you are using is shown in its colour with a filled dot; the others are grey. Blurred background, the macOS Genie effect in and out, light and dark mode.
+- **Token speed per model.** The hover card also lists each app's recent reply speed (tok/s) per model, measured separately for Codex and the Claude app from their own session logs.
 - **Stays out of the way.** Clicks pass straight through. No Dock icon, no menu bar icon, no windows.
 - **Light.** One process using about 11 MB of memory and under 1% of one CPU core while Codex is in front, and close to nothing otherwise. While Codex is closed, Tidemark only waits for it to launch.
 - **Two languages.** English and Korean are separate builds, so each stays as small as possible.
@@ -56,6 +57,7 @@ No extra service is required. Each provider is read straight from the tool you a
 | Claude | 1. Claude Code's login, **only if you opt in** with `ClaudeKeychain` (exact 5h and 7d limits from `api.anthropic.com/api/oauth/usage`). 2. OpenCodex's quota cache, if installed. 3. The Claude app's own usage indicator (5h only, read while Claude is in front). |
 | Gemini | Gemini CLI's login in `~/.gemini/oauth_creds.json` (daily Pro and Flash limits). Shown only when Gemini CLI is signed in to an account with Code Assist quota. An expired token is refreshed in memory; nothing is written back. |
 | Selected model | The composer's model picker, read through the Accessibility API. |
+| Token speed | The apps' own local logs, `~/.codex/sessions` (Codex Desktop sessions) and `~/.claude/projects` (Claude desktop app entries): only timestamps, output-token counts and model names are read, and only the newly appended part of a log. Output tokens ÷ time from request to the end of the reply, so it includes time to first token. Claude's chat mode keeps no local log and is not measured. |
 
 Tokens are read only when needed, kept in memory, and sent only to their own vendor. Each request runs at most once a minute (Gemini every five minutes).
 
