@@ -33,6 +33,8 @@ public struct OverlayConfig: Codable, Sendable {
     /// Read Claude Code's login from the Keychain for exact 5h/7d Claude limits.
     /// Off by default because macOS asks for permission the first time.
     public var claudeKeychain = false
+    /// Plans shown without a 5h bar, as "provider:plan" (providers: claude, gpt).
+    public var noFiveHourPlans = PlanRules.defaultNoFiveHour
 
     enum CodingKeys: String, CodingKey {
         case width = "Width"
@@ -47,6 +49,7 @@ public struct OverlayConfig: Codable, Sendable {
         case usageMaxAttempts = "UsageMaxAttempts"
         case usageRetryDelayMs = "UsageRetryDelayMs"
         case claudeKeychain = "ClaudeKeychain"
+        case noFiveHourPlans = "NoFiveHourPlans"
     }
 
     public init() {}
@@ -65,6 +68,7 @@ public struct OverlayConfig: Codable, Sendable {
         usageMaxAttempts = try values.decodeIfPresent(Int.self, forKey: .usageMaxAttempts) ?? usageMaxAttempts
         usageRetryDelayMs = try values.decodeIfPresent(Int.self, forKey: .usageRetryDelayMs) ?? usageRetryDelayMs
         claudeKeychain = try values.decodeIfPresent(Bool.self, forKey: .claudeKeychain) ?? claudeKeychain
+        noFiveHourPlans = try values.decodeIfPresent([String].self, forKey: .noFiveHourPlans) ?? noFiveHourPlans
     }
 
     public static func load() -> OverlayConfig {

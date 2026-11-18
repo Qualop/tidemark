@@ -54,6 +54,33 @@ final class AccessibilityLocator {
         return makeFrame(values[0], values[1])
     }
 
+    /// Claude app: the plan from the account button at the bottom of the sidebar ("성우 Pro").
+    func claudeAccountPlan(in window: AXUIElement) -> String? {
+        guard let windowFrame = frame(of: window) else { return nil }
+        // The account button sits in the sidebar's bottom-left corner; only descend into
+        // branches that overlap that corner so the chat list and transcript are never walked.
+        let corner = CGRect(x: windowFrame.minX, y: windowFrame.maxY - 80, width: 320, height: 80)
+        return autoreleasepool {
+            var queue: [AXUIElement] = [window]
+            var index = 0
+            while index < queue.count, index < 600 {
+                let values = copyValues(queue[index], [kAXRoleAttribute, kAXChildrenAttribute, kAXPositionAttribute,
+                                                       kAXSizeAttribute, kAXTitleAttribute, kAXDescriptionAttribute])
+                index += 1
+                let elementFrame = makeFrame(values[2], values[3])
+                if let elementFrame, elementFrame.width > 0, !elementFrame.intersects(corner) { continue }
+                let role = values[0] as? String ?? ""
+                if role == (kAXPopUpButtonRole as String) || role == (kAXButtonRole as String) {
+                    for case let label as String in [values[4], values[5]] {
+                        if let plan = PlanRules.claudePlan(fromAccountLabel: label) { return plan }
+                    }
+                }
+                queue.append(contentsOf: values[1] as? [AXUIElement] ?? [])
+            }
+            return nil
+        }
+    }
+
     func role(of element: AXUIElement) -> String {
         attribute(element, kAXRoleAttribute as CFString) ?? ""
     }
@@ -264,7 +291,10 @@ final class AccessibilityLocator {
     private static let selectorScore: Double = 700
 
     private func isFooterControlRole(_ role: String) -> Bool {
-        role == (kAXButtonRole as String)
+        // Checkboxes and labels count too, so the bars also stay clear of e.g. "☐ Worktree".
+        role == (kAXCheckBoxRole as String)
+            || role == (kAXStaticTextRole as String)
+            || role == (kAXButtonRole as String)
             || role == (kAXPopUpButtonRole as String)
             || role == "AXMenuButton"
             || role == "AXMenuItem"

@@ -65,6 +65,16 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var openAIWindows: [QuotaWindow] = []
     private var claudeDirect: (windows: [QuotaWindow], at: Date)?
     private var claudeAppUsage: (remaining: Int, at: Date)?
+    /// Remembered across launches so Codex shows the right slots before Claude is opened.
+    private var claudePlan: String? = UserDefaults.standard.string(forKey: "LastClaudePlan")
+    private var claudePlanCheckedAt = Date.distantPast
+    private var openAIPlan: String?
+    private var claudeHidesFiveHour: Bool {
+        PlanRules.hidesFiveHour(provider: "claude", plan: claudePlan, rules: config.noFiveHourPlans)
+    }
+    private var gptHidesFiveHour: Bool {
+        PlanRules.hidesFiveHour(provider: "gpt", plan: openAIPlan, rules: config.noFiveHourPlans)
+    }
     private var usageElement: AXUIElement?
     private var lastUsageReadAt = Date.distantPast
     private var geminiWindows: [QuotaWindow] = []
@@ -181,11 +191,14 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         apply(layout: targetIsClaude ? .bars(UsageOverlayView.compactBarMax) : .twoLine)
     }
 
-    private func apply(layout: UsageOverlayView.Layout) {
+    private func apply(layout requested: UsageOverlayView.Layout) {
         // Ignore bar-length jitter under 2 pt so resizing windows doesn't flicker.
-        if case .bars(let new) = layout, case .bars(let old) = overlayView.layout, abs(new - old) < 2 { return }
+        var layout = requested
+        if case .bars(let new) = requested, case .bars(let old) = overlayView.layout, abs(new - old) < 2 { layout = overlayView.layout }
         overlayView.update(layout: layout)
-        let logical = UsageOverlayView.logicalSize(config: config, layout: layout)
+        let plan = overlayView.snapshot.showsPlan ? overlayView.snapshot.plan : nil
+        let logical = UsageOverlayView.logicalSize(config: config, layout: layout, plan: plan,
+                                                   longLabel: overlayView.snapshot.longLabel)
         let size = NSSize(width: logical.width * config.visualScale, height: logical.height * config.visualScale)
         guard panel.frame.size != size else { return }
         panel.setContentSize(size)
@@ -494,6 +507,15 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 updateModelLabel(located.modelLabel)
                 usageElement = located.usageElement
                 readClaudeAppUsage()
+                // The Claude plan rarely changes: look it up once every 10 minutes.
+                if targetIsClaude, Date().timeIntervalSince(claudePlanCheckedAt) > 600 {
+                    claudePlanCheckedAt = Date()
+                    if let plan = locator.claudeAccountPlan(in: window), plan != claudePlan {
+                        claudePlan = plan
+                        UserDefaults.standard.set(plan, forKey: "LastClaudePlan")
+                        applyCurrentSnapshot()
+                    }
+                }
                 SanitizedStatus.writeLayout([
                     "app": target.bundleIdentifier ?? "",
                     "composer": Self.describe(located.frame),
@@ -627,7 +649,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             let left = footerLeftAXFrame?.maxX ?? composerAXFrame.minX
             freeSpan = (left, footerAnchorAXFrame.minX)
             let room = (footerAnchorAXFrame.minX - left - 24) / config.visualScale
-            guard let layout = UsageOverlayView.layout(fitting: room, preferTwoLine: !targetIsClaude, config: config) else {
+            let plan = overlayView.snapshot.showsPlan ? overlayView.snapshot.plan : nil
+            guard let layout = UsageOverlayView.layout(fitting: room, preferTwoLine: !targetIsClaude, config: config, plan: plan,
+                                                       longLabel: overlayView.snapshot.longLabel) else {
                 hidePanel() // too narrow for even "5h 20%": never cover the controls
                 return
             }
@@ -721,7 +745,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         case .openAI:
             overlayView.update(snapshot: openAISnapshot)
         case .openCodexProvider("anthropic"):
-            overlayView.update(snapshot: UsageSnapshot(windows: claudeWindows(now: Date())))
+            overlayView.update(snapshot: UsageSnapshot(windows: claudeWindows(now: Date()), plan: claudePlan,
+                                                       hideFiveHour: claudeHidesFiveHour))
         case .openCodexProvider(let provider):
             overlayView.update(snapshot: OpenCodexQuotaReader.snapshot(provider: provider) ?? .unavailable)
         }
@@ -815,7 +840,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 title: "GPT",
                 color: gptColor,
                 active: source == .openAI,
-                windows: gpt,
+                windows: gptHidesFiveHour ? gpt.filter { $0.label != "5h" } : gpt,
+                plan: PlanRules.displayName(openAIPlan),
                 updatedAt: openAIWindows.isEmpty ? nil : openAIFetchedAt
             ),
         ]
@@ -824,7 +850,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         let claudeActive = source == .openCodexProvider("anthropic")
         if !claude.windows.isEmpty || claudeActive {
             sections.insert(HoverSection(title: "Claude", color: claudeColor, active: claudeActive,
-                                         windows: claude.windows, updatedAt: claude.updatedAt), at: 0)
+                                         windows: claudeHidesFiveHour ? claude.windows.filter { $0.label != "5h" } : claude.windows,
+                                         plan: claudePlan, updatedAt: claude.updatedAt), at: 0)
         }
         // Gemini appears when Gemini CLI is signed in.
         var geminiActive = false
@@ -883,8 +910,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let result = await self.usageFetcher.refresh()
             await MainActor.run {
-                self.openAISnapshot = result?.snapshot ?? .unavailable
                 self.openAIWindows = result?.windows ?? []
+                if let plan = result?.plan { self.openAIPlan = plan }
+                self.openAISnapshot = result == nil ? .unavailable
+                    : UsageSnapshot(windows: self.openAIWindows, plan: PlanRules.displayName(self.openAIPlan),
+                                    hideFiveHour: self.gptHidesFiveHour)
                 if result != nil { self.openAIFetchedAt = Date() }
                 self.sourceStatus["codexSpeed"] = self.codexSpeed.latest.map { "\(Int($0.tokensPerSecond.rounded())) tok/s" } ?? "none"
                 self.sourceStatus["claudeSpeed"] = self.claudeSpeed.latest.map { "\(Int($0.tokensPerSecond.rounded())) tok/s" } ?? "none"

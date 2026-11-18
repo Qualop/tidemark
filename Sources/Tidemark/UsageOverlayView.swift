@@ -29,23 +29,49 @@ final class UsageOverlayView: NSView {
 
     private static var textItem: CGFloat { compactLabel + compactLabelGap + compactValue }
 
-    /// Logical (unscaled) size of each layout.
-    static func logicalSize(config: OverlayConfig, layout: Layout) -> NSSize {
+    /// Label column for a one-line item: 15 pt fits "5h"/"7d"; wider labels such as "30d" get their own width.
+    private static func labelSlot(_ label: String) -> CGFloat {
+        if label.count <= 2 { return compactLabel }
+        let width = NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).size().width
+        return max(compactLabel, width.rounded(.up))
+    }
+    /// Extra width the long window's label needs beyond the standard column.
+    private static func longExtra(_ label: String) -> CGFloat { labelSlot(label) - compactLabel }
+
+    private static let planFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+
+    /// Width of the plan name that replaces the 5h item (one-line layouts), in logical points.
+    static func planSlot(_ plan: String?) -> CGFloat? {
+        guard let plan else { return nil }
+        return (NSAttributedString(string: plan, attributes: [.font: planFont]).size().width).rounded(.up)
+    }
+
+    /// Logical (unscaled) size of each layout. With plan, the first item is the plan name.
+    static func logicalSize(config: OverlayConfig, layout: Layout, plan: String? = nil, longLabel: String = "7d") -> NSSize {
+        let first = planSlot(plan)
+        let extra = longExtra(longLabel)
         switch layout {
         case .twoLine: return NSSize(width: config.width, height: config.height)
-        case .bars(let bar): return NSSize(width: (compactItemFixed + bar) * 2 + compactItemSpacing, height: 18)
-        case .text: return NSSize(width: textItem * 2 + compactItemSpacing, height: 18)
-        case .single: return NSSize(width: textItem, height: 18)
+        case .bars(let bar): return NSSize(width: (first ?? compactItemFixed + bar) + compactItemSpacing + compactItemFixed + extra + bar, height: 18)
+        case .text: return NSSize(width: (first ?? textItem) + compactItemSpacing + textItem + extra, height: 18)
+        case .single: return NSSize(width: textItem + extra, height: 18)
         }
     }
 
     /// Widest layout that fits the given logical width, or nil when nothing fits.
-    static func layout(fitting width: CGFloat, preferTwoLine: Bool, config: OverlayConfig) -> Layout? {
+    static func layout(fitting width: CGFloat, preferTwoLine: Bool, config: OverlayConfig, plan: String? = nil,
+                       longLabel: String = "7d") -> Layout? {
         if preferTwoLine, width >= config.width { return .twoLine }
-        let bar = ((width - compactItemFixed * 2 - compactItemSpacing) / 2).rounded(.down)
+        let extra = longExtra(longLabel)
+        let bar: CGFloat
+        if let first = planSlot(plan) {
+            bar = (width - first - compactItemSpacing - compactItemFixed - extra).rounded(.down)
+        } else {
+            bar = ((width - compactItemFixed * 2 - compactItemSpacing - extra) / 2).rounded(.down)
+        }
         if bar >= compactBarMin { return .bars(min(bar, compactBarMax)) }
-        if width >= textItem * 2 + compactItemSpacing { return .text }
-        if width >= textItem { return .single }
+        if width >= logicalSize(config: config, layout: .text, plan: plan, longLabel: longLabel).width { return .text }
+        if width >= textItem + extra { return .single }
         return nil
     }
 
@@ -83,22 +109,36 @@ final class UsageOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.setFill()
         dirtyRect.fill()
+        let long = snapshot.longLabel
         switch layout {
         case .twoLine:
-            drawItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
-            drawItem(logicalX: 120, title: "7d", remaining: snapshot.weeklyRemaining)
+            if snapshot.showsPlan, let plan = snapshot.plan {
+                // One window only: a single centred item labelled "Ultra · 7d".
+                drawItem(logicalX: (CGFloat(config.width) - 101) / 2, title: "\(plan) · \(long)",
+                         remaining: snapshot.weeklyRemaining)
+            } else {
+                drawItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining)
+                drawItem(logicalX: 120, title: long, remaining: snapshot.weeklyRemaining)
+            }
         case .bars, .text:
             let bar: CGFloat
             if case .bars(let length) = layout { bar = length } else { bar = 0 }
             let item = bar > 0 ? Self.compactItemFixed + bar : Self.textItem
-            drawCompactItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining, bar: bar)
-            drawCompactItem(logicalX: item + Self.compactItemSpacing, title: "7d", remaining: snapshot.weeklyRemaining, bar: bar)
-            drawCompactDivider(logicalX: item + Self.compactItemSpacing / 2)
+            let first: CGFloat
+            if snapshot.showsPlan, let slot = Self.planSlot(snapshot.plan) {
+                drawCompactPlan(logicalX: 0)
+                first = slot
+            } else {
+                drawCompactItem(logicalX: 0, title: "5h", remaining: snapshot.fiveHourRemaining, bar: bar)
+                first = item
+            }
+            drawCompactItem(logicalX: first + Self.compactItemSpacing, title: long, remaining: snapshot.weeklyRemaining, bar: bar)
+            drawCompactDivider(logicalX: first + Self.compactItemSpacing / 2)
         case .single:
-            // The tighter window is the one worth seeing.
+            // The tighter window is the one worth seeing (always the long one on a plan without 5h).
             let five = snapshot.fiveHourRemaining, week = snapshot.weeklyRemaining
-            if let week, five == nil || week < five! {
-                drawCompactItem(logicalX: 0, title: "7d", remaining: week, bar: 0)
+            if snapshot.showsPlan || five == nil || (week != nil && week! < five!) {
+                drawCompactItem(logicalX: 0, title: long, remaining: week, bar: 0)
             } else {
                 drawCompactItem(logicalX: 0, title: "5h", remaining: five, bar: 0)
             }
@@ -128,7 +168,7 @@ final class UsageOverlayView: NSView {
         var x = logicalX * scale
         let titleSize = titleString.size()
         titleString.draw(at: NSPoint(x: x, y: midY - titleSize.height / 2))
-        x += min(titleSize.width, Self.compactLabel * scale) + Self.compactLabelGap * scale
+        x += Self.labelSlot(title) * scale + Self.compactLabelGap * scale
 
         if bar > 0 {
             let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
@@ -147,6 +187,24 @@ final class UsageOverlayView: NSView {
         }
         let valueSize = valueString.size()
         valueString.draw(at: NSPoint(x: x, y: midY - valueSize.height / 2))
+    }
+
+    /// Same grey as the "5h"/"7d" labels: the plan is context, the percentage is the number to read.
+    private var planColor: NSColor {
+        darkMode
+            ? NSColor(calibratedRed: 166 / 255, green: 166 / 255, blue: 166 / 255, alpha: 1)
+            : NSColor(calibratedRed: 105 / 255, green: 105 / 255, blue: 105 / 255, alpha: 1)
+    }
+
+    /// One-line layout: the plan name where "5h ━ 88%" would be.
+    private func drawCompactPlan(logicalX: CGFloat) {
+        guard let plan = snapshot.plan else { return }
+        let scale = CGFloat(config.visualScale)
+        let string = NSAttributedString(string: plan, attributes: [
+            .font: NSFont.systemFont(ofSize: 11 * scale, weight: .medium), .foregroundColor: planColor,
+        ])
+        let size = string.size()
+        string.draw(at: NSPoint(x: logicalX * scale, y: bounds.height / 2 - size.height / 2))
     }
 
     private func drawCompactDivider(logicalX: CGFloat) {

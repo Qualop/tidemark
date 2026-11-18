@@ -3,20 +3,58 @@ import Foundation
 public struct UsageSnapshot: Sendable, Equatable {
     public let fiveHourRemaining: Int?
     public let weeklyRemaining: Int?
+    /// Plan name (e.g. "Ultra"), shown in place of the 5h bar when the plan has no 5h limit.
+    public let plan: String?
+    /// Label of the long window: "7d", or "30d" for monthly-only plans.
+    public let longLabel: String
 
-    public init(fiveHourRemaining: Int?, weeklyRemaining: Int?) {
+    public init(fiveHourRemaining: Int?, weeklyRemaining: Int?, plan: String? = nil, longLabel: String = "7d") {
         self.fiveHourRemaining = fiveHourRemaining
         self.weeklyRemaining = weeklyRemaining
+        self.plan = plan
+        self.longLabel = longLabel
     }
+
+    /// True when the first slot shows the plan instead of a 5h bar.
+    public var showsPlan: Bool { fiveHourRemaining == nil && plan != nil }
 
     public static let unavailable = UsageSnapshot(fiveHourRemaining: nil, weeklyRemaining: nil)
 }
 
 extension UsageSnapshot {
-    /// The bars' 5h / 7d values from a list of windows.
-    public init(windows: [QuotaWindow]) {
-        self.init(fiveHourRemaining: windows.first { $0.label == "5h" }?.remaining,
-                  weeklyRemaining: windows.first { $0.label == "7d" }?.remaining)
+    /// The bars' values from a list of windows. Without a 5h window (or on a plan with no 5h
+    /// limit) the plan name takes that slot; without a 7d window the monthly one is used.
+    public init(windows: [QuotaWindow], plan: String? = nil, hideFiveHour: Bool = false) {
+        let five = hideFiveHour ? nil : windows.first { $0.label == "5h" }?.remaining
+        let long = windows.first { $0.label == "7d" } ?? windows.first { $0.label == "30d" }
+        self.init(fiveHourRemaining: five, weeklyRemaining: long?.remaining,
+                  plan: plan, longLabel: long?.label ?? "7d")
+    }
+}
+
+/// Plans whose 5-hour limit is not worth a bar, as "provider:plan" (from config).
+public enum PlanRules {
+    public static let defaultNoFiveHour = ["claude:ultra", "gpt:pro"]
+
+    public static func hidesFiveHour(provider: String, plan: String?, rules: [String]) -> Bool {
+        guard let plan = plan?.lowercased().replacingOccurrences(of: " ", with: "") else { return false }
+        return rules.contains("\(provider.lowercased()):\(plan)")
+    }
+
+    /// "prolite" -> "Pro Lite", "free" -> "Free".
+    public static func displayName(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let known = ["prolite": "Pro Lite", "chatgptpro": "Pro", "enterprise": "Enterprise", "edu": "Edu"]
+        if let name = known[raw.lowercased()] { return name }
+        return raw.prefix(1).uppercased() + raw.dropFirst().lowercased()
+    }
+
+    /// Claude app account button, e.g. "성우 Pro" or "Sungwoo · Ultra" -> "Ultra".
+    public static func claudePlan(fromAccountLabel label: String) -> String? {
+        let plans = ["free", "pro", "max", "ultra", "team", "enterprise"]
+        let words = label.lowercased().split { $0.isWhitespace || $0 == "·" || $0 == "•" }
+        guard let last = words.last, plans.contains(String(last)) else { return nil }
+        return displayName(String(last))
     }
 }
 
@@ -24,6 +62,8 @@ extension UsageSnapshot {
 public struct OpenAIUsage: Sendable {
     public let snapshot: UsageSnapshot
     public let windows: [QuotaWindow]
+    /// "free", "plus", "pro", ... as reported by the usage endpoint.
+    public let plan: String?
 }
 
 private struct AuthMaterial {
@@ -128,7 +168,8 @@ public actor UsageFetcher {
 
         // Intentionally ignore `additional_rate_limits`: only the top-level default rate_limit is authoritative.
         return OpenAIUsage(snapshot: UsageWindowParser.parse(rateLimit: rateLimit),
-                           windows: UsageWindowParser.windows(rateLimit: rateLimit, now: Date()))
+                           windows: UsageWindowParser.windows(rateLimit: rateLimit, now: Date()),
+                           plan: root["plan_type"] as? String)
     }
 
     private func loadAuthMaterial() throws -> AuthMaterial {

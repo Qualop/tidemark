@@ -14,6 +14,8 @@ struct HoverSection {
     let color: NSColor
     let active: Bool
     let windows: [QuotaWindow]
+    /// Subscription plan, shown next to the provider name.
+    var plan: String? = nil
     /// When the numbers were last refreshed; shown on the card once they are stale.
     var updatedAt: Date? = nil
 }
@@ -416,8 +418,11 @@ enum HoverCardRenderer {
                 ring.stroke()
             }
             // Only the provider in use gets its colour; the other one is grey.
-            text(section.title, titleFont, section.active ? section.color : secondary)
-                .draw(at: NSPoint(x: inset + 14, y: y))
+            let title = text(section.title, titleFont, section.active ? section.color : secondary)
+            title.draw(at: NSPoint(x: inset + 14, y: y))
+            if let plan = section.plan {
+                text(plan, resetFont, secondary).draw(at: NSPoint(x: inset + 14 + title.size().width + 6, y: y + 2.5))
+            }
             if let updated = section.updatedAt, now.timeIntervalSince(updated) > 120 {
                 let stale = text(L10n.updatedAgo(updated, now: now), resetFont, secondary)
                 stale.draw(at: NSPoint(x: width - inset - stale.size().width, y: y + 2.5))

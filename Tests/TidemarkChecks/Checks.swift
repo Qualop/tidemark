@@ -163,6 +163,19 @@ final class UsageWindowParserTests {
         precondition(ModelName.display("claude-sonnet-4-5-20250929") == "Sonnet 4.5")
         precondition(ModelName.display("ocx-claude-native--gpt-6.1-sol[1m]") == "GPT 6.1 Sol")
         precondition(ModelName.display("gpt-5.5-codex") == "GPT 5.5 Codex")
+        // Plans: Claude Ultra and GPT Pro show the plan instead of a 5h bar.
+        let rules = PlanRules.defaultNoFiveHour
+        precondition(PlanRules.hidesFiveHour(provider: "claude", plan: "Ultra", rules: rules))
+        precondition(!PlanRules.hidesFiveHour(provider: "claude", plan: "Pro", rules: rules))
+        precondition(PlanRules.hidesFiveHour(provider: "gpt", plan: "pro", rules: rules))
+        precondition(PlanRules.claudePlan(fromAccountLabel: "성우 Pro") == "Pro")
+        precondition(PlanRules.claudePlan(fromAccountLabel: "Sungwoo · Ultra") == "Ultra")
+        precondition(PlanRules.claudePlan(fromAccountLabel: "새로 만들기") == nil)
+        let ultra = UsageSnapshot(windows: [QuotaWindow(label: "5h", remaining: 100, resetAt: nil),
+                                            QuotaWindow(label: "7d", remaining: 64, resetAt: nil)], plan: "Ultra", hideFiveHour: true)
+        precondition(ultra.showsPlan && ultra.weeklyRemaining == 64 && ultra.longLabel == "7d")
+        let monthly = UsageSnapshot(windows: [QuotaWindow(label: "30d", remaining: 96, resetAt: nil)], plan: "Free")
+        precondition(monthly.showsPlan && monthly.weeklyRemaining == 96 && monthly.longLabel == "30d")
     }
 
     func testDirectSourceParsers() {

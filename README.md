@@ -18,6 +18,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
 ## Features
 
 - **Follows the model picker.** Reads the selected model from the composer and shows the matching quota within about 0.1 s of a change.
+- **Knows your plan.** On plans where the 5-hour limit never binds (Claude Ultra, ChatGPT Pro), the 5h bar is replaced by the plan name, so you see `Ultra | 7d ━━ 100%`. Plans with only a monthly window show `30d`.
 - **Codex and Claude.** Works in both desktop apps and follows whichever one is in front. Claude's control row is thin, so there the bars switch to a one-line layout.
 - **Hover card.** All providers at once, with reset countdowns. The provider you are using is shown in its colour with a filled dot; the others are grey. Blurred background, the macOS Genie effect in and out, light and dark mode.
 - **Token speed per model.** The hover card also lists each app's recent reply speed (tok/s) per model, measured separately for Codex and the Claude app from their own session logs.
@@ -75,6 +76,7 @@ Optional. Create `~/Library/Application Support/Tidemark/config.json` with any o
 | `TrackingIntervalMs` | `8` | Follow rate while the window moves or resizes |
 | `UsageRefreshIntervalMs` | `60000` | How often usage is fetched |
 | `ClaudeKeychain` | `false` | Read Claude Code's login from the Keychain for exact Claude limits. macOS asks for permission once (and again after an update, since the app is ad-hoc signed). |
+| `NoFiveHourPlans` | `["claude:ultra", "gpt:pro"]` | Plans that show the plan name in place of the 5h bar. Use `[]` to always show 5h. |
 
 ```json
 { "VisualScale": 1.0, "HorizontalOffset": -4 }
