@@ -969,16 +969,17 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
 }
 
-/// Opens Tidemark at login. Registered once; if the user turns it off in
-/// System Settings it stays off.
+/// Opens Tidemark at login. Checked on every launch: a registration that never took
+/// (or was dropped after an ad-hoc re-sign) is retried, while one the user switched off
+/// in System Settings (`requiresApproval`) is left alone. Skipped when a LaunchAgent
+/// already starts Tidemark (it sets TIDEMARK_LAUNCH_AGENT).
 enum LoginItem {
     static func registerOnFirstLaunch() {
         guard Bundle.main.bundleURL.pathExtension == "app" else { return }
-        let marker = OverlayPaths.supportDirectory.appendingPathComponent("login-item-registered")
-        guard !FileManager.default.fileExists(atPath: marker.path) else { return }
-        try? SMAppService.mainApp.register()
-        try? FileManager.default.createDirectory(at: OverlayPaths.supportDirectory, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: marker.path, contents: nil)
+        guard ProcessInfo.processInfo.environment["TIDEMARK_LAUNCH_AGENT"] == nil else { return }
+        let service = SMAppService.mainApp
+        guard service.status == .notRegistered || service.status == .notFound else { return }
+        try? service.register()
     }
 }
 

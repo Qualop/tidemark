@@ -44,7 +44,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
    ```
 4. Allow **Accessibility** access when asked (**System Settings → Privacy & Security → Accessibility**). Tidemark uses it to find the composer and read the model picker. In the Claude app it also asks Electron to expose its accessibility tree.
 
-Tidemark adds itself to Login Items on first launch. You can turn that off in **System Settings → General → Login Items**.
+Tidemark adds itself to Login Items when it starts, and checks again on every launch in case macOS dropped the registration. If you turn it off in **System Settings → General → Login Items**, it stays off.
 
 > The app is ad-hoc signed, so after an update macOS may ask for Accessibility permission again. Remove the old entry and allow the new one.
 
