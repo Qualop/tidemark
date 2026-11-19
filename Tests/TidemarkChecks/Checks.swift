@@ -168,8 +168,8 @@ final class UsageWindowParserTests {
         precondition(PlanRules.hidesFiveHour(provider: "claude", plan: "Ultra", rules: rules))
         precondition(!PlanRules.hidesFiveHour(provider: "claude", plan: "Pro", rules: rules))
         precondition(PlanRules.hidesFiveHour(provider: "gpt", plan: "pro", rules: rules))
-        precondition(PlanRules.claudePlan(fromAccountLabel: "성우 Pro") == "Pro")
-        precondition(PlanRules.claudePlan(fromAccountLabel: "Sungwoo · Ultra") == "Ultra")
+        precondition(PlanRules.claudePlan(fromAccountLabel: "민지 Pro") == "Pro")
+        precondition(PlanRules.claudePlan(fromAccountLabel: "Alex · Ultra") == "Ultra")
         precondition(PlanRules.claudePlan(fromAccountLabel: "새로 만들기") == nil)
         let ultra = UsageSnapshot(windows: [QuotaWindow(label: "5h", remaining: 100, resetAt: nil),
                                             QuotaWindow(label: "7d", remaining: 64, resetAt: nil)], plan: "Ultra", hideFiveHour: true)

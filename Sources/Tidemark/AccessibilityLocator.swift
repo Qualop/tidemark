@@ -54,7 +54,7 @@ final class AccessibilityLocator {
         return makeFrame(values[0], values[1])
     }
 
-    /// Claude app: the plan from the account button at the bottom of the sidebar ("성우 Pro").
+    /// Claude app: the plan from the account button at the bottom of the sidebar ("민지 Pro").
     func claudeAccountPlan(in window: AXUIElement) -> String? {
         guard let windowFrame = frame(of: window) else { return nil }
         // The account button sits in the sidebar's bottom-left corner; only descend into

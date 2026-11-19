@@ -49,7 +49,7 @@ public enum PlanRules {
         return raw.prefix(1).uppercased() + raw.dropFirst().lowercased()
     }
 
-    /// Claude app account button, e.g. "성우 Pro" or "Sungwoo · Ultra" -> "Ultra".
+    /// Claude app account button, e.g. "민지 Pro" or "Alex · Ultra" -> "Ultra".
     public static func claudePlan(fromAccountLabel label: String) -> String? {
         let plans = ["free", "pro", "max", "ultra", "team", "enterprise"]
         let words = label.lowercased().split { $0.isWhitespace || $0 == "·" || $0 == "•" }
