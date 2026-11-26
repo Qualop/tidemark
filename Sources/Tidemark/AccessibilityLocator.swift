@@ -22,10 +22,18 @@ private typealias Candidate = (element: AXUIElement, frame: CGRect, score: Doubl
 /// AXUIElementCopyMultipleAttributeValues and tree walks stop as soon as possible.
 final class AccessibilityLocator {
     let application: AXUIElement
+    private(set) var lastScanReadError: AXError?
 
     init(processIdentifier: pid_t) {
         application = AXUIElementCreateApplication(processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.08)
+    }
+
+    /// Enabling a cold Electron renderer can take longer than an ordinary AX read.
+    func requestAccessibility() -> AXError {
+        AXUIElementSetMessagingTimeout(application, 1)
+        defer { AXUIElementSetMessagingTimeout(application, 0.08) }
+        return AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
     // MARK: Cheap reads used by the tracking loop
@@ -121,6 +129,7 @@ final class AccessibilityLocator {
     // MARK: Locating the composer (expensive, run rarely)
 
     func locateComposer(in window: AXUIElement) -> LocatedComposer? {
+        lastScanReadError = nil
         guard let windowFrame = frame(of: window), windowFrame.width >= 500, windowFrame.height >= 350 else {
             return nil
         }
@@ -364,9 +373,11 @@ final class AccessibilityLocator {
 
     private func copyValues(_ element: AXUIElement, _ names: [String]) -> [AnyObject?] {
         var result: CFArray?
-        guard AXUIElementCopyMultipleAttributeValues(
+        let error = AXUIElementCopyMultipleAttributeValues(
             element, names as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &result
-        ) == .success,
+        )
+        if error != .success { lastScanReadError = error }
+        guard error == .success,
             let array = result as [AnyObject]?,
             array.count == names.count
         else { return Array(repeating: nil, count: names.count) }

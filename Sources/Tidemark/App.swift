@@ -44,6 +44,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var trustCheckedAt = Date.distantPast
     private var trusted = false
     private var accessibilityRequestError: Int32?
+    private var accessibilityRequestAttempts = 0
+    private var lastAccessibilityRequestAt = Date.distantPast
     private var currentInterval: TimeInterval = 0
     private lazy var hoverCard = HoverCardController(
         anchorFrame: { [weak self] in
@@ -236,6 +238,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         hoverCard.setMonitoring(false)
         target = nil
         accessibilityRequestError = nil
+        accessibilityRequestAttempts = 0
+        lastAccessibilityRequestAt = .distantPast
         locator = nil
         composerElement = nil
         footerAnchorElement = nil
@@ -292,9 +296,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         // Both Codex and Claude use Electron, which may leave its renderer's AX tree
         // disabled until a client requests it. Do this after trust is granted, including
         // when permission is granted while Tidemark is already running.
-        accessibilityRequestError = AXUIElementSetAttributeValue(
-            locator.application, "AXManualAccessibility" as CFString, kCFBooleanTrue
-        ).rawValue
+        requestAccessibility(using: locator)
         reportTracking("tracking-started")
         var createdObserver: AXObserver?
         if AXObserverCreate(target.processIdentifier, overlayAXCallback, &createdObserver) == .success,
@@ -312,6 +314,12 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         }
         setTracking(active: target.isActive && !target.isHidden)
         tick()
+    }
+
+    private func requestAccessibility(using locator: AccessibilityLocator) {
+        accessibilityRequestAttempts += 1
+        lastAccessibilityRequestAt = Date()
+        accessibilityRequestError = locator.requestAccessibility().rawValue
     }
 
     private func registerElementNotifications(
@@ -418,6 +426,13 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         guard let locator else {
             hidePanel()
             return
+        }
+        if accessibilityRequestError == AXError.cannotComplete.rawValue,
+           accessibilityRequestAttempts < 3,
+           Date().timeIntervalSince(lastAccessibilityRequestAt) >= 2 {
+            requestAccessibility(using: locator)
+            needsRescan = true
+            nextRescanAt = .distantPast
         }
 
         // Resolving the focused window costs extra round trips; the focused-window
@@ -552,7 +567,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 )
             } else {
                 // Back off while the composer is absent (settings page, loading, ...).
-                reportTracking("composer-not-found")
+                reportTracking(locator.lastScanReadError == .cannotComplete
+                    ? "composer-read-cannot-complete" : "composer-not-found")
                 rescanFailures += 1
                 nextRescanAt = Date().addingTimeInterval(min(0.25 * pow(2, Double(rescanFailures - 1)), 4))
             }
