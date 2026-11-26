@@ -92,6 +92,9 @@ final class UsageWindowParserTests {
         // Claude app picker (OpenCodex adds GPT models there).
         precondition(QuotaSource.forClaudeApp(modelLabel: "모델: Opus 5.5 높음 Opus 5.5 높음") == .openCodexProvider("anthropic"))
         precondition(QuotaSource.forClaudeApp(modelLabel: "Sonnet 5.5") == .openCodexProvider("anthropic"))
+        precondition(QuotaSource.forClaudeApp(modelLabel: "모델: Claude Opus 5 (anthropic2) 높음") == .openCodexProvider("anthropic2"))
+        precondition(QuotaSource.forClaudeApp(modelLabel: "ocx-claude-anthropic2--claude-opus-5[1m]") == .openCodexProvider("anthropic2"))
+        precondition(QuotaSource.forClaudeApp(modelLabel: "Claude Opus 5 (anthropic)") == .openCodexProvider("anthropic"))
         precondition(QuotaSource.forClaudeApp(modelLabel: "모델: GPT 6.1 Sol (native) GPT 6.1 Sol (native)") == .openAI)
         precondition(QuotaSource.forClaudeApp(modelLabel: "GPT 6 Astra (native)") == .openAI)
         precondition(QuotaSource.forClaudeApp(modelLabel: nil) == .openCodexProvider("anthropic"))
@@ -104,6 +107,7 @@ final class UsageWindowParserTests {
           "anthropic\\u0000old":{"fiveHourPercent":90,"weeklyPercent":90,"updatedAt":1},
           "anthropic\\u0000new":{"fiveHourPercent":4,"fiveHourResetAt":1794920400000,
                                  "weeklyPercent":49,"weeklyResetAt":1795050000000,"updatedAt":1794903194606},
+          "anthropic2\\u0000x":{"fiveHourPercent":25,"weeklyPercent":70,"updatedAt":3},
           "other\\u0000x":{"fiveHourPercent":1,"weeklyPercent":1,"updatedAt":2}}}
         """
         let data = Data(json.utf8)
@@ -113,6 +117,9 @@ final class UsageWindowParserTests {
         XCTAssertEqual(OpenCodexQuotaReader.parse(data: data, provider: "anthropic", now: afterFiveHourReset)!,
                        UsageSnapshot(fiveHourRemaining: 100, weeklyRemaining: 51))
         precondition(OpenCodexQuotaReader.parse(data: data, provider: "google", now: now) == nil)
+        let account = QuotaSource.forClaudeApp(modelLabel: "Claude Opus 5 (anthropic2)")
+        XCTAssertEqual(OpenCodexQuotaReader.parse(data: data, provider: account.identifier, now: now)!,
+                       UsageSnapshot(fiveHourRemaining: 75, weeklyRemaining: 30))
     }
 
     func testCodexAccountRowWithSecondResets() {

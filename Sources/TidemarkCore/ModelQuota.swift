@@ -35,6 +35,13 @@ public enum QuotaSource: Equatable, Sendable {
     /// (e.g. "GPT 6.1 Sol (native)"). Anything not clearly another provider is Claude.
     public static func forClaudeApp(modelLabel: String?) -> QuotaSource {
         guard let raw = modelLabel?.lowercased(), !raw.isEmpty else { return .openCodexProvider("anthropic") }
+        // OpenCodex exposes the account in the display label or in its generated model ID.
+        for pattern in [#"\((anthropic[0-9]*)\)"#, #"\bocx-claude-(anthropic[0-9]*)--"#] {
+            if let match = raw.range(of: pattern, options: .regularExpression),
+               let provider = raw[match].range(of: #"anthropic[0-9]*"#, options: .regularExpression) {
+                return .openCodexProvider(String(raw[provider]))
+            }
+        }
         if ["gpt", "codex", "openai"].contains(where: { raw.contains($0) }) { return .openAI }
         if raw.split(whereSeparator: { $0.isWhitespace }).contains(where: { $0.contains("/") }) {
             return from(modelLabel: raw)
