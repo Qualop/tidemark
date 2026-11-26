@@ -43,6 +43,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var windowResolvedAt = Date.distantPast
     private var trustCheckedAt = Date.distantPast
     private var trusted = false
+    private var accessibilityRequestError: Int32?
+    private var accessibilityRequestAttempts = 0
+    private var lastAccessibilityRequestAt = Date.distantPast
     private var currentInterval: TimeInterval = 0
     private lazy var hoverCard = HoverCardController(
         anchorFrame: { [weak self] in
@@ -162,6 +165,12 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     private var targetIsClaude: Bool { target?.bundleIdentifier == OverlayPaths.claudeBundleIdentifier }
 
+    private func reportTracking(_ state: String) {
+        guard let app = target?.bundleIdentifier else { return }
+        SanitizedStatus.writeTracking(app: app, state: state, accessibilityError: accessibilityRequestError,
+                                      activationAttribute: locator?.activationAttribute)
+    }
+
     private static func describe(_ rect: CGRect) -> String {
         String(format: "x %.0f y %.0f w %.0f h %.0f", rect.minX, rect.minY, rect.width, rect.height)
     }
@@ -229,6 +238,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         hidePanel()
         hoverCard.setMonitoring(false)
         target = nil
+        accessibilityRequestError = nil
+        accessibilityRequestAttempts = 0
+        lastAccessibilityRequestAt = .distantPast
         locator = nil
         composerElement = nil
         footerAnchorElement = nil
@@ -256,15 +268,12 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         else { return false }
         target = application
         locator = AccessibilityLocator(processIdentifier: application.processIdentifier)
-        if application.bundleIdentifier == OverlayPaths.claudeBundleIdentifier {
-            // Electron only builds its accessibility tree when asked to.
-            AXUIElementSetAttributeValue(locator!.application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        }
         return true
     }
 
     private func continueWhenAccessibilityIsAvailable() {
         guard AXIsProcessTrusted() else {
+            reportTracking("waiting-for-accessibility-permission")
             hidePanel()
             if !permissionPrompted {
                 permissionPrompted = true
@@ -285,6 +294,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     private func beginAccessibilityTracking() {
         guard let target, let locator else { return }
+        // Chromium/Electron may leave the renderer's AX tree disabled until a client
+        // requests it. Do this after trust is granted, including
+        // when permission is granted while Tidemark is already running.
+        requestAccessibility(using: locator)
+        reportTracking("tracking-started")
         var createdObserver: AXObserver?
         if AXObserverCreate(target.processIdentifier, overlayAXCallback, &createdObserver) == .success,
            let createdObserver {
@@ -301,6 +315,14 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         }
         setTracking(active: target.isActive && !target.isHidden)
         tick()
+    }
+
+    private func requestAccessibility(using locator: AccessibilityLocator) {
+        accessibilityRequestAttempts += 1
+        lastAccessibilityRequestAt = Date()
+        accessibilityRequestError = locator.requestAccessibility(
+            allowChromiumFallback: target?.bundleIdentifier == OverlayPaths.codexBundleIdentifier
+        ).rawValue
     }
 
     private func registerElementNotifications(
@@ -391,6 +413,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         let shouldTrack = target.isActive && !target.isHidden
         setTracking(active: shouldTrack)
         guard shouldTrack else {
+            reportTracking("app-inactive")
             hidePanel()
             return
         }
@@ -399,12 +422,20 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             trusted = AXIsProcessTrusted()
         }
         guard trusted else {
+            reportTracking("accessibility-permission-unavailable")
             hidePanel()
             return
         }
         guard let locator else {
             hidePanel()
             return
+        }
+        if accessibilityRequestError == AXError.cannotComplete.rawValue,
+           accessibilityRequestAttempts < 3,
+           Date().timeIntervalSince(lastAccessibilityRequestAt) >= 2 {
+            requestAccessibility(using: locator)
+            needsRescan = true
+            nextRescanAt = .distantPast
         }
 
         // Resolving the focused window costs extra round trips; the focused-window
@@ -424,12 +455,14 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             }
         }
         guard let window = currentWindowElement else {
+            reportTracking("usable-window-not-found")
             retainOrHideLastPosition()
             return
         }
         let windowState = locator.windowState(window)
         guard !windowState.minimized, let windowFrame = windowState.frame,
               windowFrame.width >= 500, windowFrame.height >= 350 else {
+            reportTracking("window-unavailable-or-too-small")
             currentWindowElement = nil
             retainOrHideLastPosition()
             return
@@ -537,6 +570,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                 )
             } else {
                 // Back off while the composer is absent (settings page, loading, ...).
+                reportTracking(locator.lastScanReadError == .cannotComplete
+                    ? "composer-read-cannot-complete" : "composer-not-found")
                 rescanFailures += 1
                 nextRescanAt = Date().addingTimeInterval(min(0.25 * pow(2, Double(rescanFailures - 1)), 4))
             }
@@ -638,6 +673,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     ) {
         // Without the control row there is no safe spot: hide rather than cover text or buttons.
         guard footerAnchorAXFrame != nil else {
+            reportTracking("model-selector-not-found")
             hidePanel()
             return
         }
@@ -652,6 +688,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             let plan = overlayView.snapshot.showsPlan ? overlayView.snapshot.plan : nil
             guard let layout = UsageOverlayView.layout(fitting: room, preferTwoLine: !targetIsClaude, config: config, plan: plan,
                                                        longLabel: overlayView.snapshot.longLabel) else {
+                reportTracking("insufficient-space")
                 hidePanel() // too narrow for even "5h 20%": never cover the controls
                 return
             }
@@ -678,6 +715,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             if hoverCard.visible { hoverCard.anchorMoved() }
         }
         if !panel.isVisible { panel.orderFrontRegardless() }
+        reportTracking("visible")
     }
 
     private func appKitRect(fromAccessibilityRect rect: CGRect) -> CGRect {
