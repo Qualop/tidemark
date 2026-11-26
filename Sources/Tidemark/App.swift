@@ -561,11 +561,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private func readModelLabelFromAnchor(force: Bool = false) {
         lastModelReadAt = Date()
         guard let locator, let footerAnchorElement else { return }
-        // Poll only the popup's own attributes; walk its children when those change
-        // (or every 0.5s if the popup exposes no text of its own).
+        // Claude can change the account suffix in a child while the popup's own label
+        // stays the same. Check the children periodically for that picker.
         let own = locator.ownText(footerAnchorElement)
         if !force, own == lastAnchorOwnText,
-           !own.isEmpty || Date().timeIntervalSince(lastFullModelReadAt) < 0.5 {
+           (!targetIsClaude && !own.isEmpty) || Date().timeIntervalSince(lastFullModelReadAt) < 0.5 {
             return
         }
         lastAnchorOwnText = own
@@ -733,6 +733,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         if targetIsClaude {
             guard source != claudeQuotaSource else { return }
             claudeQuotaSource = source
+            claudeAppUsage = nil
         } else {
             guard source != quotaSource else { return }
             quotaSource = source
@@ -796,7 +797,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     /// Cheap read of the Claude app's usage control (one batched AX request).
     private func readClaudeAppUsage() {
         lastUsageReadAt = Date()
-        guard targetIsClaude, let locator, let usageElement,
+        guard targetIsClaude, claudeQuotaSource == .openCodexProvider("anthropic"),
+              let locator, let usageElement,
               let remaining = ClaudeAppUsageParser.fiveHourRemaining(from: locator.ownText(usageElement)) else { return }
         let changed = claudeAppUsage?.remaining != remaining
         claudeAppUsage = (remaining, Date())
