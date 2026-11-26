@@ -103,6 +103,10 @@ Scripts/uninstall.sh
 
 Or quit Tidemark (`pkill -x Tidemark`), delete the app, and remove `~/Library/Application Support/Tidemark`.
 
+## Diagnosing a missing overlay
+
+`~/Library/Application Support/Tidemark/tracking.json` records the last tracking state for each app, the Tidemark version, and the result of the accessibility activation request (`0` means success). States distinguish an inactive app, missing permission, a missing usable window or composer, a missing model selector, insufficient space, and a shown overlay. Records update only when the state changes; they contain no window titles or conversation text. A successful usage request in `status.json` does not imply the overlay is visible.
+
 ## How it stays light
 
 - The composer is found with one Accessibility tree walk that stops as soon as it reaches it. After that, only a few attributes are read, batched into one request per element.

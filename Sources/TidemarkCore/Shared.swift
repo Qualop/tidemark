@@ -9,6 +9,7 @@ public enum OverlayPaths {
     public static let model = supportDirectory.appendingPathComponent("model.json")
     public static let layout = supportDirectory.appendingPathComponent("layout.json")
     public static let sources = supportDirectory.appendingPathComponent("sources.json")
+    public static let tracking = supportDirectory.appendingPathComponent("tracking.json")
     public static let overlayLock = supportDirectory.appendingPathComponent("tidemark.lock")
     public static let codexBundleIdentifier = "com.openai.codex"
     public static let claudeBundleIdentifier = "com.anthropic.claudefordesktop"
@@ -121,6 +122,31 @@ public final class ProcessLock {
 }
 
 public enum SanitizedStatus {
+    /// Last tracking state per app. No window titles, UI text, or conversation content.
+    public static func writeTracking(app: String, state: String, accessibilityError: Int32?) {
+        let signature = "\(state):\(accessibilityError.map(String.init) ?? "none")"
+        guard trackingSignatures[app] != signature else { return }
+        var record: [String: Any] = [
+            "state": state,
+            "updatedAt": ISO8601DateFormatter().string(from: Date()),
+            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+        ]
+        if let accessibilityError { record["accessibilityRequestError"] = accessibilityError }
+        var records = trackingRecords
+        records[app] = record
+        guard let data = try? JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]) else { return }
+        do {
+            try FileManager.default.createDirectory(at: OverlayPaths.supportDirectory, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            try data.write(to: OverlayPaths.tracking, options: .atomic)
+            trackingRecords = records
+            trackingSignatures[app] = signature
+        } catch { /* Diagnostics must not interrupt the overlay. */ }
+    }
+
+    nonisolated(unsafe) private static var trackingRecords: [String: [String: Any]] = [:]
+    nonisolated(unsafe) private static var trackingSignatures: [String: String] = [:]
+
     /// Last located composer geometry, for diagnosing placement. Written only on change.
     public static func writeLayout(_ object: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),

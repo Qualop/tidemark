@@ -103,6 +103,10 @@ Scripts/uninstall.sh
 
 직접 지우려면 Tidemark를 종료하고(`pkill -x Tidemark`) 앱과 `~/Library/Application Support/Tidemark` 폴더를 삭제하면 됩니다.
 
+## 막대가 보이지 않을 때
+
+`~/Library/Application Support/Tidemark/tracking.json`에 앱별 마지막 추적 상태, Tidemark 버전, 접근성 활성화 요청 결과(`0`은 성공)를 기록합니다. 앱 비활성, 권한 대기, 창·입력창·모델 선택기 감지 실패, 표시 공간 부족, 표시 완료를 구분합니다. 상태가 바뀔 때만 기록하며 창 제목이나 대화 내용은 포함하지 않습니다. `status.json`의 사용량 조회 성공은 막대 표시 성공을 뜻하지 않습니다.
+
 ## 가볍게 유지하는 방법
 
 - 입력창은 손쉬운 사용 트리를 한 번 훑어 찾고, 찾는 즉시 탐색을 멈춥니다. 그 뒤로는 요소마다 필요한 속성 몇 개만 요청 한 번에 묶어 읽습니다.
