@@ -123,8 +123,8 @@ public final class ProcessLock {
 
 public enum SanitizedStatus {
     /// Last tracking state per app. No window titles, UI text, or conversation content.
-    public static func writeTracking(app: String, state: String, accessibilityError: Int32?) {
-        let signature = "\(state):\(accessibilityError.map(String.init) ?? "none")"
+    public static func writeTracking(app: String, state: String, accessibilityError: Int32?, activationAttribute: String?) {
+        let signature = "\(state):\(accessibilityError.map(String.init) ?? "none"):\(activationAttribute ?? "none")"
         guard trackingSignatures[app] != signature else { return }
         var record: [String: Any] = [
             "state": state,
@@ -132,6 +132,7 @@ public enum SanitizedStatus {
             "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
         ]
         if let accessibilityError { record["accessibilityRequestError"] = accessibilityError }
+        if let activationAttribute { record["activationAttribute"] = activationAttribute }
         var records = trackingRecords
         records[app] = record
         guard let data = try? JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]) else { return }

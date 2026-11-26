@@ -23,6 +23,7 @@ private typealias Candidate = (element: AXUIElement, frame: CGRect, score: Doubl
 final class AccessibilityLocator {
     let application: AXUIElement
     private(set) var lastScanReadError: AXError?
+    private(set) var activationAttribute = "AXManualAccessibility"
 
     init(processIdentifier: pid_t) {
         application = AXUIElementCreateApplication(processIdentifier)
@@ -30,10 +31,18 @@ final class AccessibilityLocator {
     }
 
     /// Enabling a cold Electron renderer can take longer than an ordinary AX read.
-    func requestAccessibility() -> AXError {
+    func requestAccessibility(allowChromiumFallback: Bool) -> AXError {
         AXUIElementSetMessagingTimeout(application, 1)
         defer { AXUIElementSetMessagingTimeout(application, 0.08) }
-        return AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        activationAttribute = "AXManualAccessibility"
+        let error = AXUIElementSetAttributeValue(application, activationAttribute as CFString, kCFBooleanTrue)
+        guard allowChromiumFallback, error == .attributeUnsupported || error == .notImplemented else { return error }
+        // Chromium-based Codex builds do not implement Electron's manual attribute.
+        // Chromium debounces this request for two seconds, and may return notImplemented
+        // from the superclass even after accepting it. Let subsequent scans establish
+        // readiness rather than repeatedly writing the attribute and resetting the delay.
+        activationAttribute = "AXEnhancedUserInterface"
+        return AXUIElementSetAttributeValue(application, activationAttribute as CFString, kCFBooleanTrue)
     }
 
     // MARK: Cheap reads used by the tracking loop

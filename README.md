@@ -42,7 +42,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
    ```sh
    xattr -dr com.apple.quarantine /Applications/Tidemark.app
    ```
-4. Allow **Accessibility** access when asked (**System Settings → Privacy & Security → Accessibility**). Tidemark uses it to find the composer and read the model picker. Once access is granted, it asks both Codex and Claude to expose their Electron accessibility trees.
+4. Allow **Accessibility** access when asked (**System Settings → Privacy & Security → Accessibility**). Tidemark uses it to find the composer and read the model picker. Once access is granted, it asks both Codex and Claude to expose their renderer accessibility trees. Codex builds that do not implement Electron’s `AXManualAccessibility` use Chromium’s `AXEnhancedUserInterface` instead.
 
 Tidemark adds itself to Login Items when it starts, and checks again on every launch in case macOS dropped the registration. If you turn it off in **System Settings → General → Login Items**, it stays off.
 
@@ -105,7 +105,7 @@ Or quit Tidemark (`pkill -x Tidemark`), delete the app, and remove `~/Library/Ap
 
 ## Diagnosing a missing overlay
 
-`~/Library/Application Support/Tidemark/tracking.json` records the last tracking state for each app, the Tidemark version, and the result of the accessibility activation request (`0` means success). States distinguish an inactive app, missing permission, a missing usable window or composer, a missing model selector, insufficient space, and a shown overlay. Records update only when the state changes; they contain no window titles or conversation text. A successful usage request in `status.json` does not imply the overlay is visible.
+`~/Library/Application Support/Tidemark/tracking.json` records the last tracking state for each app, the Tidemark version, and the result of the accessibility activation request (`0` means success). States distinguish an inactive app, missing permission, a missing usable window or composer, a missing model selector, insufficient space, and a shown overlay. Records update only when the state changes; they contain no window titles or conversation text. The activation attribute is also recorded. Chromium may return `-25208` after accepting its activation request; allow its two-second debounce and use the tracking state to determine whether the overlay was located. A successful usage request in `status.json` does not imply the overlay is visible.
 
 ## How it stays light
 

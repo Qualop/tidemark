@@ -167,7 +167,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     private func reportTracking(_ state: String) {
         guard let app = target?.bundleIdentifier else { return }
-        SanitizedStatus.writeTracking(app: app, state: state, accessibilityError: accessibilityRequestError)
+        SanitizedStatus.writeTracking(app: app, state: state, accessibilityError: accessibilityRequestError,
+                                      activationAttribute: locator?.activationAttribute)
     }
 
     private static func describe(_ rect: CGRect) -> String {
@@ -293,8 +294,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     private func beginAccessibilityTracking() {
         guard let target, let locator else { return }
-        // Both Codex and Claude use Electron, which may leave its renderer's AX tree
-        // disabled until a client requests it. Do this after trust is granted, including
+        // Chromium/Electron may leave the renderer's AX tree disabled until a client
+        // requests it. Do this after trust is granted, including
         // when permission is granted while Tidemark is already running.
         requestAccessibility(using: locator)
         reportTracking("tracking-started")
@@ -319,7 +320,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private func requestAccessibility(using locator: AccessibilityLocator) {
         accessibilityRequestAttempts += 1
         lastAccessibilityRequestAt = Date()
-        accessibilityRequestError = locator.requestAccessibility().rawValue
+        accessibilityRequestError = locator.requestAccessibility(
+            allowChromiumFallback: target?.bundleIdentifier == OverlayPaths.codexBundleIdentifier
+        ).rawValue
     }
 
     private func registerElementNotifications(
