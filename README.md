@@ -42,7 +42,7 @@ If you route Claude or other providers into Codex through OpenCodex, Tidemark fo
    ```sh
    xattr -dr com.apple.quarantine /Applications/Tidemark.app
    ```
-4. Allow **Accessibility** access when asked (**System Settings → Privacy & Security → Accessibility**). Tidemark uses it to find the composer and read the model picker. In the Claude app it also asks Electron to expose its accessibility tree.
+4. Allow **Accessibility** access when asked (**System Settings → Privacy & Security → Accessibility**). Tidemark uses it to find the composer and read the model picker. Once access is granted, it asks both Codex and Claude to expose their Electron accessibility trees.
 
 Tidemark adds itself to Login Items when it starts, and checks again on every launch in case macOS dropped the registration. If you turn it off in **System Settings → General → Login Items**, it stays off.
 

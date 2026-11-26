@@ -256,10 +256,6 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         else { return false }
         target = application
         locator = AccessibilityLocator(processIdentifier: application.processIdentifier)
-        if application.bundleIdentifier == OverlayPaths.claudeBundleIdentifier {
-            // Electron only builds its accessibility tree when asked to.
-            AXUIElementSetAttributeValue(locator!.application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        }
         return true
     }
 
@@ -285,6 +281,10 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 
     private func beginAccessibilityTracking() {
         guard let target, let locator else { return }
+        // Both Codex and Claude use Electron, which may leave its renderer's AX tree
+        // disabled until a client requests it. Do this after trust is granted, including
+        // when permission is granted while Tidemark is already running.
+        AXUIElementSetAttributeValue(locator.application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         var createdObserver: AXObserver?
         if AXObserverCreate(target.processIdentifier, overlayAXCallback, &createdObserver) == .success,
            let createdObserver {
